@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Not sandboxed, deliberately and for now: the archive this app reads and
+	     writes lives at ~/Library/Application Support/Almanac/Weather, which is
+	     Almanac's directory. Sandboxing before that split is decided would cut
+	     the app off from years of samples on its first launch. -->
+</dict>
+</plist>

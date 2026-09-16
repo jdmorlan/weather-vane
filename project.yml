@@ -1,0 +1,32 @@
+name: Weather
+options:
+  bundleIdPrefix: jdm-solutions
+  deploymentTarget:
+    macOS: "26.0"
+  createIntermediateGroups: true
+
+packages:
+  WeatherKit:
+    path: Packages/WeatherKit
+
+targets:
+  Weather:
+    type: application
+    platform: macOS
+    sources:
+      - Weather
+    dependencies:
+      - package: WeatherKit
+    settings:
+      base:
+        PRODUCT_NAME: Weather
+        PRODUCT_BUNDLE_IDENTIFIER: jdm-solutions.weather
+        DEVELOPMENT_TEAM: CG68B3UD28
+        SWIFT_VERSION: "5.0"
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_ENTITLEMENTS: Weather/Weather.entitlements
+        INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.weather
+        GENERATE_INFOPLIST_FILE: YES
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
