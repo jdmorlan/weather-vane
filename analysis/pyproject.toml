@@ -1,0 +1,19 @@
+[project]
+name = "vane-analysis"
+version = "0.1.0"
+description = "Read the Vane weather archive into pandas/numpy."
+requires-python = ">=3.11"
+dependencies = [
+    "pandas>=2.2",
+    "numpy>=2.0",
+    "pyarrow>=17",
+    "matplotlib>=3.9",
+    "jupyterlab>=4.2",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["vane"]
