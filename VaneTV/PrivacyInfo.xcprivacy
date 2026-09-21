@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Vane tracks nobody and collects nothing. The station readings are the
+	     user's own, fetched from their own WeatherFlow account and stored on
+	     their own device; nothing leaves it except the requests that fetch them.
+	     Both arrays below are empty because that is the honest answer, not
+	     because the sections were skipped. -->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<!-- REQUIRED-REASON APIs. Apple rejects uploads that touch these without
+	     declaring why (ITMS-91053). UserDefaults is the only one Vane uses:
+	     the token, the station id, the home point and the facing. CA92.1 is
+	     "access info from the app itself" — no app group is read across, and
+	     nothing here is shared with another developer's app. -->
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>
