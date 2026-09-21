@@ -1,22 +1,39 @@
 //
-//  RecentMorningsView.swift  (macOS)
+//  DayShapesView.swift  (macOS)
 //
-//  "Yesterday morning felt better than the mornings before it — was it?"
+//  "Was yesterday morning different from the mornings before it?" — and, now
+//  that it is a surface rather than a card, the same question about any stretch
+//  of clock and any day in the last month.
 //
-//  Every other archive card on this screen reads DailyRecords. This one can't:
-//  a day's min and max say nothing about the shape inside it, and the question is
-//  entirely about that shape. So it re-fetches raw half-hourly observations for
-//  the last month — one request, because bucket=30 caps a window at 30 days and
-//  ten mornings therefore cost the same as two.
+//  WHAT IT WAS. A card at the bottom of the Now scroll called "Recent mornings",
+//  wired to exactly one window (6–10am) and one subject (yesterday). Everything
+//  under it was already general — `DayWindows.slice` takes any `ClockWindow`,
+//  `WindowOverlayChart` takes any measure and any subject day, and
+//  `RecentWindowsModel.show` re-slices what it already holds WITHOUT touching
+//  the network. `ClockWindow.afternoon` had been defined and never once used.
+//  So the card was showing one-eighth of a thing that was already built and
+//  paid for, from a page whose every other card is anchored to today.
+//
+//  WHY IT LIVES UNDER HISTORY. Its subject is a finished day — it has to be,
+//  since a morning still in progress can't be compared to ones that ended. That
+//  is the archive's register, not Now's. It also costs a 29-day raw fetch, which
+//  has no business running at launch for a card most of the way down a scroll;
+//  under History it is fetched when the surface is first opened.
+//
+//  Every other archive surface reads DailyRecords. This one can't: a day's min
+//  and max say nothing about the shape inside it, and the question is entirely
+//  about that shape. So it re-fetches raw half-hourly observations for the last
+//  month — one request, because bucket=30 caps a window at 30 days and ten
+//  mornings therefore cost the same as two.
 //
 //  Nothing is stored. This is a live comparison of the recent past, not a second
 //  archive; if it turns out to be something you look at every day, THAT's when
 //  keeping the samples earns its disk.
 //
-//  The chart is ordinary on purpose: one line per morning, all on one temperature
-//  axis, clock time along the bottom. The comparison IS the overlay — a reader
-//  should be able to see the subject day sitting apart, or not, without decoding
-//  an encoding.
+//  The chart is ordinary on purpose: one line per day, all on one measure axis,
+//  clock time along the bottom. The comparison IS the overlay — a reader should
+//  be able to see the subject day sitting apart, or not, without decoding an
+//  encoding.
 //
 
 import SwiftUI
@@ -40,6 +57,11 @@ final class RecentWindowsModel: ObservableObject {
     private let daysBack = 29
 
     private var raw: StationObservations?
+
+    /// Days actually present in the fetch, newest first — what the subject-day
+    /// stepper walks. Derived rather than stored so it can never disagree with
+    /// the windows on screen.
+    var availableDays: [String] { windows.map(\.day).sorted(by: >) }
 
     func load(token: String, stationID: Int, window: ClockWindow = .morning,
               now: Date = Date()) async {
@@ -79,14 +101,12 @@ final class RecentWindowsModel: ObservableObject {
     }
 }
 
-// MARK: - The card
+// MARK: - The surface
 
-struct RecentMorningsCard: View {
-    let windows: [DayWindow]
-    let window: ClockWindow
-    /// The day being asked about — yesterday, since today's morning is still
-    /// being compared against days that already ended.
-    let subject: String
+/// The controls the old card had hardcoded: which stretch of clock, which
+/// measure, and which day is the one being asked about.
+struct DayShapesCard: View {
+    @ObservedObject var model: RecentWindowsModel
 
     enum Measure: String, CaseIterable, Identifiable {
         case temperature = "Temperature"
@@ -105,53 +125,120 @@ struct RecentMorningsCard: View {
     }
 
     @State private var measure: Measure = .temperature
+    /// Nil means "the most recent day we have", which is what the card always
+    /// showed and is still the right thing to open on. Held as an override
+    /// rather than seeded, so the default survives the window changing under it.
+    @State private var pinnedSubject: String?
 
-    /// The last ten days is a reading limit, not a data one — the fetch holds a
-    /// month, and past about ten lines the chart stops being legible.
-    private var shown: [DayWindow] { DayWindows.recent(windows, count: 10) }
+    /// The last ten days is a READING limit, not a data one — the fetch holds a
+    /// month, and past about ten lines the chart stops being legible. Ten ending
+    /// at the subject, so stepping back walks a window through the month rather
+    /// than shortening it to nothing.
+    private var shown: [DayWindow] {
+        guard let subject else { return DayWindows.recent(model.windows, count: 10) }
+        let upTo = model.windows.filter { $0.day <= subject }
+        return DayWindows.recent(upTo, count: 10)
+    }
+
+    private var subject: String? { pinnedSubject ?? model.availableDays.first }
 
     private var standout: WindowStandout? {
-        DayWindows.standout(shown, day: subject,
-                            measure: measure.path, measureName: measure.name)
+        guard let subject else { return nil }
+        return DayWindows.standout(shown, day: subject,
+                                   measure: measure.path, measureName: measure.name)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            HStack {
-                if let standout {
-                    Text(standout.sentence(subject: subjectLabel))
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                } else {
-                    Text("Not enough fully-recorded \(windowNoun)s in the last ten days to compare.")
-                        .font(.callout).foregroundStyle(.secondary)
-                }
-                Spacer(minLength: 12)
-                Picker("", selection: $measure) {
-                    ForEach(Measure.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .frame(width: 200)
-            }
-
-            WindowOverlayChart(days: shown, window: window,
-                               measure: measure.path, subject: subject)
-
+            controls
+            finding
+            WindowOverlayChart(days: shown, window: model.window,
+                               measure: measure.path, subject: subject ?? "")
             legend
         }
     }
 
-    private var subjectLabel: String { "Yesterday \(windowNoun)" }
+    // MARK: Controls
 
-    private var windowNoun: String {
-        window.startHour < 12 ? "morning" : "afternoon"
+    private var controls: some View {
+        HStack(spacing: 14) {
+            Picker("", selection: Binding(
+                get: { model.window },
+                // Free: the fetch holds a month of raw samples and a different
+                // window is a re-slice, never a request. See `RecentWindowsModel.show`.
+                set: { model.show($0) })) {
+                ForEach(ClockWindow.presets, id: \.startHour) { w in
+                    Text(w.name.capitalized).tag(w)
+                }
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 260)
+
+            Text(model.window.label)
+                .font(.caption.monospacedDigit()).foregroundStyle(.tertiary)
+
+            Spacer(minLength: 0)
+
+            Picker("", selection: $measure) {
+                ForEach(Measure.allCases) { Text($0.rawValue).tag($0) }
+            }
+            .pickerStyle(.segmented).labelsHidden().frame(width: 200)
+        }
+    }
+
+    /// The subject stepper reads as a date rather than as an index, because the
+    /// question is "what was Tuesday like" and not "what was day seven like".
+    private var subjectStepper: some View {
+        let days = model.availableDays
+        let index = subject.flatMap { days.firstIndex(of: $0) } ?? 0
+        return HStack(spacing: 6) {
+            Button { step(to: index + 1, in: days) } label: { Image(systemName: "chevron.left") }
+                .disabled(index + 1 >= days.count)
+            Text(subjectLabel).font(.callout.weight(.medium)).frame(minWidth: 108)
+            Button { step(to: index - 1, in: days) } label: { Image(systemName: "chevron.right") }
+                .disabled(index <= 0)
+            if pinnedSubject != nil {
+                Button("Latest") { pinnedSubject = nil }.buttonStyle(.link).font(.caption)
+            }
+        }
+        .buttonStyle(.borderless)
+    }
+
+    private func step(to index: Int, in days: [String]) {
+        guard days.indices.contains(index) else { return }
+        pinnedSubject = days[index]
+    }
+
+    @ViewBuilder private var finding: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 12) {
+            if let standout {
+                Text(standout.sentence(subject: subjectLabel))
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            } else {
+                Text("Not enough fully-recorded \(model.window.name)s around this day to compare.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+            Spacer(minLength: 0)
+            subjectStepper
+        }
+    }
+
+    /// "Yesterday morning" only when it IS yesterday. Once the stepper has moved,
+    /// a label that still said "yesterday" would be describing a different day
+    /// from the one drawn in bold.
+    private var subjectLabel: String {
+        guard let subject else { return "—" }
+        guard let date = DayKey.date(from: subject, timeZone: .current) else { return subject }
+        let calendar = Calendar.current
+        if calendar.isDateInYesterday(date) { return "Yesterday \(model.window.name)" }
+        if calendar.isDateInToday(date) { return "This \(model.window.name)" }
+        return date.formatted(.dateTime.weekday(.abbreviated).month(.abbreviated).day())
     }
 
     private var legend: some View {
         HStack(spacing: 14) {
             label(color: .accentColor, text: subjectLabel, bold: true)
-            label(color: .secondary, text: "Other \(windowNoun)s", bold: false)
+            label(color: .secondary, text: "Other \(model.window.name)s", bold: false)
             if shown.contains(where: { !$0.isReliable }) {
                 label(color: .secondary, text: "Dashed: partly recorded", bold: false)
             }

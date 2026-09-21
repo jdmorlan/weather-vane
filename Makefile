@@ -4,7 +4,7 @@
 # subdirectory itself, so you never have to.
 
 ANALYSIS := analysis
-NOTEBOOK := notebooks/01-first-look.ipynb
+NOTEBOOK := notebooks/00-one-day.ipynb
 
 .DEFAULT_GOAL := help
 .PHONY: help notebook lab sync clean-cache

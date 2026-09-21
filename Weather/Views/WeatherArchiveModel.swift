@@ -32,6 +32,15 @@ final class WeatherArchiveModel: ObservableObject {
     /// Nil until the first load finishes; the forecast renders without it.
     @Published private(set) var climatology: Climatology?
 
+    /// The archive is being parsed into `climatology` right now.
+    ///
+    /// Same omission as `WeatherSamplesModel.isPreparing`, with the same
+    /// consequence: `reload` parses every year file on a detached task, and until
+    /// it lands `climatology` is nil — so Rhythms, Rain and Explore all announced
+    /// "Not enough record yet" about an archive holding four years. The message
+    /// was not early, it was wrong.
+    @Published private(set) var isLoadingClimatology = false
+
     /// True while re-fetching days that predate the current rollup. Distinct from
     /// a plain catch-up because the archive is already complete by day — it's the
     /// per-day detail that's being filled in — and the banner should say so
@@ -167,11 +176,16 @@ final class WeatherArchiveModel: ObservableObject {
     /// sees a half-updated archive.
     private func reload() {
         let store = self.store
+        isLoadingClimatology = true
         Task.detached(priority: .utility) {
-            guard let records = try? store.allRecords() else { return }
-            let climate = Climatology(records: records)
+            let records = try? store.allRecords()
+            let climate = records.map(Climatology.init(records:))
             await MainActor.run { [weak self] in
                 guard let self else { return }
+                // Cleared before the guard, so an unreadable archive settles into
+                // its empty state rather than spinning forever.
+                self.isLoadingClimatology = false
+                guard let records, let climate else { return }
                 self.dayCount = records.count
                 self.earliestDay = records.first?.day
                 self.latestDay = records.last?.day

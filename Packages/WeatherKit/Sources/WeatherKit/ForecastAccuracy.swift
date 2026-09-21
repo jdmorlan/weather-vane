@@ -85,6 +85,31 @@ public struct ForecastVerdict: Equatable, Sendable {
     public var caveat: String?
 
     public var dayCount: Int { checks.count }
+
+    /// The same finding, short enough to sit in another card's header.
+    ///
+    /// `sentence` is written to be read once, standing alone, and says the whole
+    /// thing — which direction, how often, over how many days. This is the
+    /// version that rides above the ten-day it grades, where the forecast is the
+    /// subject and the grade is an annotation on it: one clause, no commas, and
+    /// the number a reader would repeat.
+    public var headline: String {
+        let degrees = ForecastAccuracy.format(abs(bias))
+        if abs(bias) > tolerance && isConsistent {
+            return "Runs \(degrees)° \(bias < 0 ? "cold" : "warm") over \(dayCount) days"
+        }
+        if meanAbsoluteError > tolerance {
+            return "Off \(ForecastAccuracy.format(meanAbsoluteError))° either way over \(dayCount) days"
+        }
+        return "Within \(ForecastAccuracy.format(tolerance))° on \(closeDays) of \(dayCount) days"
+    }
+
+    /// Whether the headline is good news, which is the only thing the icon
+    /// beside it needs to know. A forecast inside tolerance most days has
+    /// nothing to act on; anything else is worth a second look.
+    public var isReassuring: Bool {
+        abs(bias) <= tolerance && meanAbsoluteError <= tolerance
+    }
     /// True when the misses point overwhelmingly one way — the case where the
     /// number is worth acting on rather than just noting.
     public var isConsistent: Bool {
@@ -188,7 +213,7 @@ public enum ForecastAccuracy {
                 + "The comparison can't separate a warm forecast from a shaded thermometer."
     }
 
-    private static func format(_ value: Double) -> String {
+    static func format(_ value: Double) -> String {
         value.rounded() == value ? String(Int(value)) : String(format: "%.1f", value)
     }
 }

@@ -61,36 +61,36 @@ final class WeatherModel: ObservableObject {
     }
 }
 
+/// The station surfaces: Now, History, Wind and Explore.
+///
+/// FOUR OF THE SIX, and the four that have something in common — every one of
+/// them is built out of THIS station's readings, live or archived. Radar and
+/// Pattern are neither, which is why they're separate views entirely rather
+/// than two more cases below.
+///
+/// It no longer owns its models or its navigation. Both moved up to the window
+/// (`StationModels`, `Destination`) when the segmented picker became a sidebar:
+/// a picker inside a `ScrollView` never unmounts anything, and a detail column
+/// unmounts on every change of destination. The models are handed in and held
+/// as `@ObservedObject` so this view still redraws on their changes while
+/// something longer-lived keeps them alive.
 struct WeatherView: View {
     @EnvironmentObject private var settings: AppSettings
-    @StateObject private var model = WeatherModel()
-    @StateObject private var archive = WeatherArchiveModel()
-    /// The station's MINUTES, and the wind climatology derived from them. Its own
-    /// model rather than a corner of `archive` because the two fill on different
-    /// clocks and at wildly different costs — a day of samples is 1,400 readings
-    /// against the daily archive's one row — and because this one owns a cache
-    /// that has to be folded after a fetch, which the daily archive has no notion of.
-    @StateObject private var samples = WeatherSamplesModel()
-    @StateObject private var mornings = RecentWindowsModel()
-    /// Today's minutes. Its own model for the same reason `mornings` has one: the
-    /// archive keeps a day reduced to its extremes and means, and everything here
-    /// is a question about the shape INSIDE the day — when it rained, and what
-    /// the morning was actually like. Both read the same fetch.
-    @StateObject private var todaySamples = DayObservationsModel()
-    /// NWS watches and warnings for the home point. Its own model because it
-    /// polls on its own clock — a warning issued while you're reading the ten-day
-    /// has to arrive without you asking.
-    @StateObject private var hazards = WeatherHazardModel()
-    /// How the ten-day card has been doing. Its own model because it reads two
-    /// stores and neither of them is the fetch: the forecast log this view
-    /// writes on every refresh, and the daily archive `archive` is filling in
-    /// behind it.
-    @StateObject private var forecastCheck = ForecastCheckModel()
-    /// The 500 mb pattern. Its own model because it has nothing to do with the
-    /// station: a different source (the GFS), a different clock (four runs a
-    /// day), and it works with no Tempest configured at all.
-    @StateObject private var upperAir = UpperAirModel()
-    @State private var tab: Tab = .now
+
+    @ObservedObject private var model: WeatherModel
+    @ObservedObject private var archive: WeatherArchiveModel
+    @ObservedObject private var samples: WeatherSamplesModel
+    @ObservedObject private var mornings: RecentWindowsModel
+    @ObservedObject private var todaySamples: DayObservationsModel
+    @ObservedObject private var hazards: WeatherHazardModel
+    @ObservedObject private var forecastCheck: ForecastCheckModel
+    @ObservedObject private var precip: PrecipOutlookModel
+
+    /// Which of the four is on screen. A `let` rather than `@State`: the sidebar
+    /// owns the selection now, and a second copy of it here would be a second
+    /// source of truth for the same fact.
+    let destination: Destination
+
     /// Held here rather than inside Explore so another card can hand one over.
     /// Opens on THIS year: "how often has it rained lately" is the question you
     /// arrive with, and all-time is a deliberate widening from there.
@@ -100,179 +100,49 @@ struct WeatherView: View {
         return seeded
     }()
 
+    /// Ask the window to go somewhere. The History → Explore hand-off used to be
+    /// `tab = .explore` on a private `@State`; with selection living in the
+    /// sidebar it has to be a request rather than an assignment.
+    var navigate: (Destination) -> Void
+
+    init(models: StationModels,
+         destination: Destination,
+         navigate: @escaping (Destination) -> Void = { _ in }) {
+        model = models.weather
+        archive = models.archive
+        samples = models.samples
+        mornings = models.mornings
+        todaySamples = models.todaySamples
+        hazards = models.hazards
+        forecastCheck = models.forecastCheck
+        precip = models.precip
+        self.destination = destination
+        self.navigate = navigate
+    }
+
     var body: some View {
         Group {
-            if !settings.hasWeatherStation {
-                notConfigured
-            } else if let report = model.report {
+            if let report = model.report {
                 dashboard(report)
             } else if model.isLoading {
                 ProgressView("Reading your station…").frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if let error = model.error {
                 ContentUnavailableView("Couldn’t load weather", systemImage: "cloud.bolt",
                                        description: Text(error))
+                    .emptyStatePanel()
             } else {
                 Color.clear
             }
         }
-        .navigationTitle("Weather")
-        .toolbar {
-            ToolbarItem {
-                Button { Task { await load() } } label: { Image(systemName: "arrow.clockwise") }
-                    .disabled(model.isLoading || upperAir.isLoading)
-                    .help("Refresh")
-            }
-        }
-        // NOTE — Almanac wired three more modifiers in here: a `SurfaceRouter` that
+        // NOTE — Almanac wired two more modifiers in here: a `SurfaceRouter` that
         // let a conversation hand this view a `DayQuery` to adopt, and a matching
         // publish of whatever query is on screen so an ask could say "refine that".
         // That is the LLM harness, not weather, so it stayed behind. `query` still
         // lives at this level, which is the whole seam — anything that wants to
         // drive Explore from outside has one property to set.
-        .task {
-            if model.report == nil { await load() }
-            // The cache first and separately: it's a small file read, it paints the
-            // Wind tab immediately, and it must not wait behind a network catch-up
-            // that on a cold archive takes the better part of an hour.
-            samples.loadCached()
-            catchUpArchives()
-            await mornings.load(token: settings.tempestToken, stationID: settings.tempestStationID)
-        }
-        // A separate task, because it never finishes: it polls for as long as
-        // Weather is on screen, and SwiftUI cancels it when the view goes away.
-        .task { await hazards.poll(settings: settings) }
-        // A kept-alive pane outlives midnight, and appearing is no longer a
-        // proxy for "a new day". Without this the archive stopped at the day the
-        // app was launched, and yesterday could never be measured or graded.
-        .task {
-            for await _ in NotificationCenter.default.notifications(named: .NSCalendarDayChanged) {
-                catchUpArchives()
-            }
-        }
-        // Re-graded when the archive gains a day — yesterday can only be scored
-        // once the catch-up has measured it — and when a refresh files a new
-        // claim, which is what makes the card appear on the very first morning
-        // instead of after a relaunch.
-        .task(id: checkKey) {
-            await forecastCheck.load(store: archive.store,
-                                     timeZone: model.report?.timezone ?? .current,
-                                     key: checkKey)
-        }
-        // Only while the pattern is on screen, and re-run when home moves — a run
-        // fetched for another point holds the wrong "height here". `load` itself
-        // decides whether a newer GFS run can exist yet, so reopening the tab costs
-        // a file read, not a fetch.
-        .task(id: patternKey) {
-            guard patternVisible else { return }
-            await upperAir.load(home: homePoint)
-        }
-    }
-
-    private var patternVisible: Bool { tab == .pattern || !settings.hasWeatherStation }
-
-    private var homePoint: GeoPoint? {
-        settings.hasHome ? GeoPoint(latitude: settings.homeLat, longitude: settings.homeLon) : nil
-    }
-
-    private var patternKey: String {
-        "\(patternVisible)|\(settings.homeLat)|\(settings.homeLon)"
-    }
-
-    private var patternSection: some View {
-        UpperAirPatternView(model: upperAir, home: homePoint) {
-            Task { await upperAir.load(home: homePoint, force: true) }
-        }
-    }
-
-    /// What the forecast check depends on: the last measured day, the station's
-    /// zone, and the moment of the newest capture.
-    private var checkKey: String {
-        let tz = model.report?.timezone?.identifier ?? "—"
-        let updated = model.lastUpdated.map { String(Int($0.timeIntervalSince1970)) } ?? "—"
-        return "\(archive.latestDay ?? "—")|\(tz)|\(updated)"
-    }
-
-    /// Bring the daily archive and the sample store up to yesterday. Runs
-    /// alongside the live fetch rather than gating it: the forecast is what you
-    /// opened this screen for, and the archive filling in behind it is background
-    /// work. Both models ignore a call while one is already running.
-    private func catchUpArchives() {
-        archive.catchUp(token: settings.tempestToken, stationID: settings.tempestStationID)
-        samples.catchUp(token: settings.tempestToken, stationID: settings.tempestStationID,
-                        daily: archive.store)
-    }
-
-    private func load() async {
-        // An explicit refresh on the pattern asks Open-Meteo whether a newer run
-        // has landed, even inside the window where one normally couldn't.
-        if patternVisible { await upperAir.load(home: homePoint, force: true) }
-        await model.refresh(token: settings.tempestToken, stationID: settings.tempestStationID)
-        // The refresh button means "tell me what's true now", and what's active
-        // over the acre is part of that — waiting out the poll interval after an
-        // explicit ask is the wrong answer.
-        await hazards.refresh(settings: settings)
-        // And the finished days behind today — a no-op when the archive already
-        // holds yesterday.
-        catchUpArchives()
-
-        // Today's minutes. Re-read on every refresh, because while it's raining
-        // the card IS the live end of an open spell — but no more often than
-        // every five minutes, which is finer than the answer can change.
-        if let r = model.report {
-            let bucket = Int(Date().timeIntervalSince1970 / 300)
-            await todaySamples.load(day: todayKey(r), key: "\(todayKey(r))|\(bucket)",
-                                 token: settings.tempestToken,
-                                 stationID: settings.tempestStationID,
-                                 timeZone: r.timezone ?? .current)
-        }
-    }
-
-    /// No station, but the upper-air pattern needs none — so it's shown rather
-    /// than hidden behind a setup screen.
-    private var notConfigured: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 18) {
-                VStack(alignment: .leading, spacing: 4) {
-                    Label("Connect your Tempest station", systemImage: "cloud.sun").font(.headline)
-                    Text("Add your WeatherFlow API token and station ID in Settings → Weather to see your forecast here. The upper-air pattern below doesn’t need a station.")
-                        .foregroundStyle(.secondary)
-                }
-                patternSection
-            }
-            .padding(24)
-            .frame(maxWidth: 1180, alignment: .leading)
-            .frame(maxWidth: .infinity)
-        }
     }
 
     // MARK: Dashboard
-
-    /// Two registers, and they want different things from the screen.
-    ///
-    /// NOW is anchored to a moment: what it's like, what today does next, what
-    /// the week holds. HISTORY is anchored to a STRETCH — a month, a season, a
-    /// range you picked — and everything under it answers for that stretch.
-    /// They were one scroll of ten cards, which meant the archive cards sat
-    /// below the forecast ignoring each other, and there was nowhere to put a
-    /// period selector that could plausibly govern anything.
-    /// EXPLORE is the third register: not a moment and not a stretch, but a
-    /// QUESTION — "show me the days when…" — answered over the whole record.
-    enum Tab: String, CaseIterable, Identifiable {
-        case now = "Now"
-        case history = "History"
-        // WIND is a fourth register and not a slice of History, which is organised
-        // by PERIOD — a month, a season, all-time. Every question about the wind is
-        // already all-time (which way does it usually come from) or all-time sliced
-        // by month (does that turn with the season), so a period selector would have
-        // nothing to govern. It's the same reasoning that kept Records and Rainfall
-        // out of the period section, one step further along.
-        case wind = "Wind"
-        case explore = "Explore"
-        // PATTERN is the upper air: not this acre's weather but the wave that
-        // steers it, from a model run rather than the station.
-        case pattern = "Pattern"
-        var id: String { rawValue }
-    }
 
     @ViewBuilder private func dashboard(_ r: WeatherReport) -> some View {
         ScrollView {
@@ -284,32 +154,28 @@ struct WeatherView: View {
             // rebuilt result paid for the day list, the calendar and the streaks even while you were
             // looking at the controls at the top.
             LazyVStack(alignment: .leading, spacing: 18) {
-                // ABOVE the tab picker, and above the station's own lightning
-                // alerts: a tornado warning outranks everything else on the
-                // screen, including whichever tab you came here for.
+                // ABOVE everything, including the station's own lightning alerts:
+                // a tornado warning outranks whatever you came to this
+                // destination to read.
                 HazardBanner(watch: hazards.watch)
                 alertsBanner(r)
                 archiveBanner
                 samplesBanner
-                Picker("", selection: $tab) {
-                    ForEach(Tab.allCases) { Text($0.rawValue).tag($0) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                // `alignment: .leading` is doing real work: the control's
-                // intrinsic width is under 240, and a bare `maxWidth` centres it
-                // in the leftover space — which parked it against the cards'
-                // INNER padding instead of their edge.
-                .frame(maxWidth: 320, alignment: .leading)
 
-                switch tab {
+                // The five-way segmented picker that used to sit here is gone —
+                // it is the sidebar now. Worth naming what that fixed rather
+                // than leaving a silent absence: the picker was INSIDE this
+                // scroll, so opening History and reading down took the only way
+                // back off the top of the screen.
+
+                switch destination {
                 // The split is by ANCHOR, not by where the data came from. Two
                 // of these cards read the archive and still belong here: "this
                 // day in past years" is context for the number at the top of
                 // the screen, and "what's ahead" extends the ten-day forecast
                 // out to a season. Both answer a question about TODAY, which is
-                // what this tab is for — a period selector would have nothing
-                // to say to either of them.
+                // what this destination is for — a period selector would have
+                // nothing to say to either of them.
                 case .now:
                     // Built once and handed down. Two cards read today's shape —
                     // the extremes at the top and the strip below — and reducing
@@ -322,17 +188,24 @@ struct WeatherView: View {
                     // wet day it's the most important thing on the screen, and on
                     // a dry one it isn't there at all.
                     rainCard(r)
-                    radarCard           // what's coming, and any warning drawn over it
+                    // Radar used to sit here, and doesn't now: it is its own
+                    // destination, one click away in the sidebar, and a second
+                    // copy on this scroll meant two `RadarModel`s warming two
+                    // tile caches for the same loop.
                     // TODAY, midnight to midnight, at the resolution it actually
                     // happens in. The sentence and the heads-up lines lead; the
                     // hours carry the numbers; the day's parts are bands over the
                     // same strip.
                     hourlyCard(r, strip)
                     if !r.days.isEmpty { tenDayCard(r) }
-                    forecastCheckCard(r)
                     seasonsCard(r)      // past ten days: what the season does next
-                    morningsCard(r)     // raw samples: the last ten mornings, overlaid
-                    pastYearsCard(r)    // the archive: this date, every year
+                    // The ONE archive card on this page, and it earns the place:
+                    // "is today hot for September 16" is a question about today.
+                    // "How the forecast has done" and "Recent mornings" used to
+                    // sit here too and don't now — one grades the source rather
+                    // than describing the sky, the other is anchored to a
+                    // finished day. Both are under History.
+                    thisDateCard(r)
                 // ONE control, and every card is a lens under it. Records,
                 // Rainfall and Winter chill used to sit loose below the period
                 // section; they take no period because they ARE the whole
@@ -340,26 +213,34 @@ struct WeatherView: View {
                 // rather than staying as three cards with no door of their own.
                 case .history:
                     periodSection(r)
+                    // Both arrived from Now, and both belong to the same
+                    // register: things measured about finished days. The period
+                    // browser above governs a STRETCH; these two answer about
+                    // the record itself, so they sit under it rather than
+                    // inside its grain picker.
+                    forecastCheckSection(r)
+                    dayShapesSection
+                case .rhythms:
+                    rhythmsSection(r)
+                case .rain:
+                    rainSection(r)
                 case .wind:
                     windSection
-                case .pattern:
-                    patternSection
                 case .explore:
                     exploreSection(r) {
                         withAnimation(.easeInOut(duration: 0.25)) {
                             scroll.scrollTo(WeatherExploreView.builderAnchor, anchor: .top)
                         }
                     }
+                // Their own views, reached from the sidebar. Listed rather than
+                // defaulted so that adding another destination is a compile
+                // error here instead of a blank screen.
+                case .radar, .pattern, .station:
+                    EmptyView()
                 }
 
-                VStack(alignment: .leading, spacing: 3) {
-                    if let updated = model.lastUpdated {
-                        Text("Updated \(updated.formatted(date: .omitted, time: .shortened)) · Tempest")
-                            .font(.caption).foregroundStyle(.tertiary)
-                    }
-                    archiveFooter
-                }
-                .frame(maxWidth: .infinity, alignment: .leading)
+                archiveFooter
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
             .padding(24)
             .frame(maxWidth: 1180, alignment: .leading)
@@ -380,8 +261,54 @@ struct WeatherView: View {
                 // that's a query — so the card hands one over rather than
                 // growing its own day list.
                 query = handOff
-                tab = .explore
+                navigate(.explore)
             }
+        }
+    }
+
+    /// RAIN — how much, how often, and how long between.
+    ///
+    /// Assembled rather than invented. `RainfallCard` was in History's All-time
+    /// grain and answers the AMOUNT half; `RainHabits` is new and answers the
+    /// other half, which nothing in the app could say before — two Octobers
+    /// holding the same four inches draw identically on a totals chart and are
+    /// not the same October.
+    ///
+    /// It also retires a detour. "Wettest month", "rain by year", "when did it
+    /// last rain" were all reachable only by building a query in Explore, which
+    /// is the right tool for a question you thought of and the wrong one for a
+    /// question the app already knows you'll ask.
+    @ViewBuilder private func rainSection(_ r: WeatherReport) -> some View {
+        // ABOVE THE ARCHIVE GATE, DELIBERATELY. Everything below needs about a
+        // season of record before it can say what is usual; this needs only a
+        // home point, and "is rain coming" is the question someone opens Rain to
+        // ask on the day they install the app.
+        card(label: "Next 18 hours") {
+            PrecipOutlookCard(outlook: precip.outlook,
+                              failure: precip.failure,
+                              isLoading: precip.isLoading)
+        }
+
+        if let climate = archive.climatology, climate.dayCount >= 90 {
+            let today = todayKey(r)
+            card(label: "Rainfall") {
+                RainfallCard(climate: climate, today: today)
+            }
+            // NOTE — the biggest-days rows are deliberately not clickable. The
+            // obvious destination is History's day grain pinned to that date,
+            // and `WeatherArchiveBrowser` owns its grain and position privately
+            // with no way in from outside. A tap that landed somewhere merely
+            // rain-adjacent would be worse than no tap; opening it properly
+            // means giving the browser an entry point, which is its own change.
+            RainHabitsSection(climate: climate, today: today) { label, content in
+                card(label: label) { content }
+            }
+        } else if archive.isLoadingClimatology {
+            preparing("Reading your rain history", detail: "Going through the archive.")
+        } else {
+            ContentUnavailableView("Not enough record yet", systemImage: "drop",
+                                   description: Text("Rain needs about a season of archive before it can say how much is usual, how often it falls, or how long the dry stretches run."))
+                .emptyStatePanel()
         }
     }
 
@@ -404,14 +331,36 @@ struct WeatherView: View {
                     detail: "\(fill.completedDays.formatted()) of \(fill.totalDays.formatted()) days"
                         + (fill.samplesWritten > 0 ? " · \(fill.samplesWritten.formatted()) readings" : ""),
                     fraction: fill.fraction)
+        } else if samples.isPreparing {
+            preparing("Reading the wind out of your archive",
+                      detail: "The rose is built from every minute on record, which takes a moment the first time.")
         } else {
             // Direction is the one measure the DAILY archive never kept — a mean of
             // a circular quantity is meaningless — so this tab cannot fall back on
             // it the way the others can. Saying so is better than an empty rose.
             ContentUnavailableView("No wind history yet", systemImage: "wind",
                                    description: Text("Wind direction lives in the station's minute-by-minute readings, which are still being collected. This fills in behind you."))
-                .frame(height: 260)
+                .emptyStatePanel(minHeight: 260)
         }
+    }
+
+    /// "Something is happening" when there is no fraction to show.
+    ///
+    /// Deliberately the same card as `waiting` — same padding, same corner, same
+    /// tint — because to a reader these are one state, not two. The difference
+    /// between a bar and a spinner is whether the work can say how far along it
+    /// is, which is a fact about the work rather than about what it is doing.
+    private func preparing(_ title: String, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                ProgressView().controlSize(.small)
+                Text(title).font(.callout.weight(.medium))
+            }
+            Text(detail).font(.caption).foregroundStyle(.secondary)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
     }
 
     private func waiting(_ title: String, detail: String, fraction: Double) -> some View {
@@ -434,9 +383,12 @@ struct WeatherView: View {
         if let climate = archive.climatology, climate.dayCount >= 30 {
             WeatherExploreView(climate: climate, today: todayKey(r), query: $query,
                                onOpenQuery: onOpenQuery)
+        } else if archive.isLoadingClimatology {
+            preparing("Reading your archive", detail: "Indexing the record so it can be questioned.")
         } else {
             ContentUnavailableView("Not enough archive yet", systemImage: "magnifyingglass",
                                    description: Text("Once the station's history has filled in, you can ask it for the days when anything happened."))
+                .emptyStatePanel()
         }
     }
 
@@ -449,34 +401,25 @@ struct WeatherView: View {
         DayKey.string(for: Date(), timeZone: r.timezone ?? .current)
     }
 
-    /// Today against the normal for the date, inside the Right-now card. Renders
-    /// nothing at all until there's enough record to say something true — a young
-    /// archive stays quiet rather than quoting a "normal" built from one year.
-    @ViewBuilder private func normalComparison(_ r: WeatherReport) -> some View {
-        if let climate = archive.climatology, !climate.isEmpty {
-            let today = r.days.first
-            let comparison = WeatherAlmanac.comparison(climate, day: todayKey(r),
-                                                       high: today?.high, low: today?.low)
-            if comparison.hasSomethingToSay {
-                Divider()
-                NormalComparisonStrip(comparison: comparison,
-                                      todayHigh: today?.high, todayLow: today?.low)
-            }
-        }
-    }
-
-    /// The last ten mornings laid over each other. Not from the archive — the
-    /// archive keeps a day's extremes, and this is a question about the shape
-    /// inside a day, so it re-fetches the raw half-hourly samples.
+    /// The Day-shapes surface, under History where its subject lives.
     ///
-    /// Held back until there's a subject day with neighbours to compare it to; a
-    /// single morning drawn alone answers nothing.
-    @ViewBuilder private func morningsCard(_ r: WeatherReport) -> some View {
-        if let yesterday = DayKey.previous(todayKey(r)), mornings.windows.count >= 3 {
-            card(label: "Recent mornings") {
-                RecentMorningsCard(windows: mornings.windows,
-                                   window: mornings.window,
-                                   subject: yesterday)
+    /// `.task` here rather than at the root: it is a 29-day raw fetch, and it
+    /// used to run on every cold launch for a card most of the way down the Now
+    /// scroll. Opening History is the first moment anyone has asked for it.
+    @ViewBuilder private var dayShapesSection: some View {
+        if mornings.windows.count >= 3 {
+            card(label: "Day shapes") {
+                DayShapesCard(model: mornings)
+            }
+        } else if mornings.isLoading {
+            card(label: "Day shapes") {
+                ProgressView("Reading the last month of minutes…")
+                    .frame(maxWidth: .infinity, minHeight: 80)
+            }
+        } else if let error = mornings.error {
+            card(label: "Day shapes") {
+                Text("Couldn't read the recent days — \(error)")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
     }
@@ -500,19 +443,46 @@ struct WeatherView: View {
         }
     }
 
-    @ViewBuilder private func pastYearsCard(_ r: WeatherReport) -> some View {
-        if let climate = archive.climatology {
+    /// Today against this date's record — the headline, the rank, and the years
+    /// behind them, in one card.
+    ///
+    /// IT WAS TWO. A `NormalComparisonStrip` inside the Right-now card said
+    /// "8° warmer than usual, the 3rd warmest", and four cards further down
+    /// `PastYearsStrip` drew the same date across every year. Same question,
+    /// answered twice at different resolutions, with four unrelated cards
+    /// between them — so neither could be read as the elaboration of the other,
+    /// and the strip up top was quietly the more complete of the two.
+    ///
+    /// Together they are one thing: the claim, then the evidence for it.
+    @ViewBuilder private func thisDateCard(_ r: WeatherReport) -> some View {
+        if let climate = archive.climatology, !climate.isEmpty {
             let key = todayKey(r)
             let monthDay = DayKey.monthDay(of: key)
-            let history = climate.history(monthDay: monthDay, excludingYear: DayKey.year(of: key))
-            if !history.isEmpty {
-                card(label: "This day in past years") {
-                    PastYearsStrip(history: history,
-                                   normal: climate.normal(monthDay: monthDay),
-                                   dateLabel: WeatherAlmanac.dateLabel(monthDay),
-                                   todayHigh: r.days.first?.high,
-                                   todayLow: r.days.first?.low,
-                                   defaultEmphasis: climate.seasonalEmphasis(monthDay: monthDay))
+            let today = r.days.first
+            let comparison = WeatherAlmanac.comparison(climate, day: key,
+                                                       high: today?.high, low: today?.low)
+            let history = climate.history(monthDay: monthDay,
+                                          excludingYear: DayKey.year(of: key))
+            if comparison.hasSomethingToSay || !history.isEmpty {
+                card(label: "Today for \(WeatherAlmanac.dateLabel(monthDay))") {
+                    VStack(alignment: .leading, spacing: 16) {
+                        if comparison.hasSomethingToSay {
+                            NormalComparisonStrip(comparison: comparison,
+                                                  todayHigh: today?.high,
+                                                  todayLow: today?.low)
+                        }
+                        if !history.isEmpty {
+                            // Only when BOTH are present: a divider above a lone
+                            // chart is a rule under nothing.
+                            if comparison.hasSomethingToSay { Divider().opacity(0.5) }
+                            PastYearsStrip(history: history,
+                                           normal: climate.normal(monthDay: monthDay),
+                                           dateLabel: WeatherAlmanac.dateLabel(monthDay),
+                                           todayHigh: today?.high,
+                                           todayLow: today?.low,
+                                           defaultEmphasis: climate.seasonalEmphasis(monthDay: monthDay))
+                        }
+                    }
                 }
             }
         }
@@ -524,12 +494,57 @@ struct WeatherView: View {
     // All time, and the wrappers that used to place them are gone rather than
     // left behind as a second way in.
 
+    /// The one sentence about where this year sits against the usual one, and a
+    /// way through to the rest. What that sentence is ABOUT — when the heat
+    /// breaks here, what "the heat breaking" even means — is Rhythms' job, one
+    /// question to a card.
     @ViewBuilder private func seasonsCard(_ r: WeatherReport) -> some View {
         if let climate = archive.climatology, climate.dayCount >= 90 {
             card(label: "What’s ahead") {
                 SeasonTransitionsCard(climate: climate, today: todayKey(r),
-                                      forecast: seasonForecast(r))
+                                      forecast: seasonForecast(r),
+                                      onOpen: { navigate(.rhythms) })
             }
+        }
+    }
+
+    /// RHYTHMS — when things usually happen here.
+    ///
+    /// A LIST OF ANSWERED QUESTIONS, which is the third shape this page has had
+    /// and the first one that says anything on its own. It opened as the Now
+    /// card's season timeline handed a longer axis; then as a year-wide chart of
+    /// four measures at once. Both were true, dense and silent — a FIELD, with
+    /// the finding left in it for the reader to locate. The verdict that ended
+    /// the second one was the right one: "you look at it and say, what the hell
+    /// is this really telling me."
+    ///
+    /// The fault was one chart carrying several stories, fused because the
+    /// measures happened to share a date axis. They now get a card each: the
+    /// question as the heading, the answer as a sentence, the parameters printed
+    /// under it, and a strip whose only job is to show that the date is the
+    /// middle of a window and where that sits against today.
+    ///
+    /// WHAT IT IS NOT is Explore. That takes conditions and returns a set of
+    /// days, for someone with a hypothesis. These take nothing and return a
+    /// position on the calendar, for someone who just wants to know the place.
+    @ViewBuilder private func rhythmsSection(_ r: WeatherReport) -> some View {
+        if let climate = archive.climatology, climate.dayCount >= 90 {
+            RhythmQuestionsView(climate: climate, today: todayKey(r),
+                                forecast: seasonForecast(r))
+            if let shape = samples.dayShape, shape.isMeaningful {
+                card(label: "The shape of a day") {
+                    DayShapeCard(climate: shape)
+                }
+            }
+            card(label: "Winter chill") {
+                WinterChillCard(climate: climate, today: todayKey(r), alwaysOpen: true)
+            }
+        } else if archive.isLoadingClimatology {
+            preparing("Reading the years behind you", detail: "Going through the archive.")
+        } else {
+            ContentUnavailableView("Not enough record yet", systemImage: "repeat",
+                                   description: Text("Rhythms are read out of the years behind you — when the nights let go, when the first freeze lands. It needs about a season of archive before it can say any of that."))
+                .emptyStatePanel()
         }
     }
 
@@ -656,29 +671,6 @@ struct WeatherView: View {
         return date.formatted(.dateTime.month(.abbreviated).day().year())
     }
 
-    // MARK: Radar
-
-    /// Needs a home location rather than a station: the station tells you what is
-    /// happening ON the acre, and radar's whole job is what hasn't got here yet.
-    /// Without a home point there is nothing to centre on, and a map of somewhere
-    /// arbitrary is worse than no map.
-    @ViewBuilder private var radarCard: some View {
-        if let home = settings.homeCoordinate {
-            card(label: "Radar") {
-                // Only the hazards that HAVE an outline get drawn. A watch covers
-                // whole counties, and tracing its boundary on a 30-mile view would
-                // draw a line across the picture that means nothing about where
-                // the storm is.
-                RadarCard(home: home, hazards: hazards.watch.state().drawable)
-            }
-        } else {
-            card(label: "Radar") {
-                Text("Set your home location in Settings to centre the radar on it.")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-        }
-    }
-
     // MARK: Alerts (only when something needs attention)
 
     @ViewBuilder private func alertsBanner(_ r: WeatherReport) -> some View {
@@ -729,7 +721,6 @@ struct WeatherView: View {
                     Divider()
                     comfortGauges(r)
                     pressureRow(r)
-                    normalComparison(r)
                 }
                 .frame(maxWidth: .infinity)
 
@@ -961,6 +952,7 @@ struct WeatherView: View {
     private func tenDayCard(_ r: WeatherReport) -> some View {
         card(label: "10-day forecast") {
             VStack(alignment: .leading, spacing: 14) {
+                forecastGrade
                 if let week = r.weekComfort {
                     Text(week).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -981,11 +973,51 @@ struct WeatherView: View {
         }
     }
 
-    /// Directly under the ten-day, and wrapped in the same card chrome — this is
-    /// a note about that card, not a card of its own subject. Renders nothing
-    /// until the log holds something, so it appears the first morning after this
-    /// shipped rather than announcing an empty feature.
-    @ViewBuilder private func forecastCheckCard(_ r: WeatherReport) -> some View {
+    /// The ten-day's own report card, as ONE LINE above the forecast it grades.
+    ///
+    /// It was a separate card titled "How the forecast has done", sitting
+    /// between the ten-day and the season outlook. The instinct behind that
+    /// placement was right — a grade is only useful while the number it grades
+    /// is still on screen — but a card is the wrong size for it: it is not a
+    /// subject, it is an annotation on the subject above it, and giving it
+    /// equal chrome made the Now scroll read as if the forecast's accuracy were
+    /// a peer of the forecast.
+    ///
+    /// So the finding rides in the header and the working — day by day, bias,
+    /// worst miss — is under History, one click away, where the rest of the
+    /// app's self-measurement lives.
+    @ViewBuilder private var forecastGrade: some View {
+        if let verdict = forecastCheck.verdict {
+            HStack(spacing: 8) {
+                Image(systemName: verdict.isReassuring
+                      ? "checkmark.circle.fill" : "exclamationmark.circle.fill")
+                    .foregroundStyle(verdict.isReassuring
+                                     ? AnyShapeStyle(.green) : AnyShapeStyle(.orange))
+                    .font(.caption)
+                Text(verdict.headline)
+                    .font(.caption.weight(.medium))
+                Spacer(minLength: 0)
+                Button("Detail") { navigate(.history) }
+                    .buttonStyle(.link).font(.caption)
+            }
+        } else if forecastCheck.watchingSince != nil {
+            // The waiting state still has to speak. A log quietly filling for a
+            // week with nothing on screen is indistinguishable from one that is
+            // broken, and the first thing you want to know after starting to
+            // keep score is that score-keeping started.
+            HStack(spacing: 8) {
+                Image(systemName: "clock").foregroundStyle(.tertiary).font(.caption)
+                Text("Keeping score — not enough finished days to grade yet")
+                    .font(.caption).foregroundStyle(.tertiary)
+                Spacer(minLength: 0)
+                Button("Detail") { navigate(.history) }
+                    .buttonStyle(.link).font(.caption)
+            }
+        }
+    }
+
+    /// The full working, under History.
+    @ViewBuilder private func forecastCheckSection(_ r: WeatherReport) -> some View {
         if forecastCheck.verdict != nil || forecastCheck.watchingSince != nil {
             card(label: "How the forecast has done") {
                 ForecastCheckCard(model: forecastCheck, timezone: r.timezone ?? .current)

@@ -76,7 +76,8 @@ that's how they're stored. `vane.UNITS` maps each column to its unit so a plot c
 | `vane/paths.py` | finds the archive — App Group container, then the legacy folder |
 | `vane/archive.py` | `Archive.samples()`, the Parquet cache, `daily()` |
 | `vane/derive.py` | dew point, wind vectors, coverage — matching the Swift |
-| `notebooks/01-first-look.ipynb` | a tour, executed with outputs |
+| `notebooks/00-one-day.ipynb` | **start here** — one day of weather, no prior pandas assumed |
+| `notebooks/01-first-look.ipynb` | a tour of the whole record; a reference, not a lesson |
 
 ## Three things this data will teach you
 

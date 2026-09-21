@@ -1,8 +1,10 @@
-name: Weather
+name: Vane
 options:
   bundleIdPrefix: jdm-solutions
   deploymentTarget:
     macOS: "26.0"
+    tvOS: "26.0"
+    iOS: "26.0"
   createIntermediateGroups: true
 
 packages:
@@ -10,7 +12,7 @@ packages:
     path: Packages/WeatherKit
 
 targets:
-  Weather:
+  Vane:
     type: application
     platform: macOS
     sources:
@@ -19,14 +21,128 @@ targets:
       - package: WeatherKit
     settings:
       base:
-        PRODUCT_NAME: Weather
-        PRODUCT_BUNDLE_IDENTIFIER: jdm-solutions.weather
+        PRODUCT_NAME: Vane
+        # RENAMED, and the old comment here argued against exactly this. It said
+        # UserDefaults is keyed by bundle id — token, station, home, facing — so
+        # a rename silently resets a configured app to first-run for a cosmetic
+        # win. That was correct when the win WAS cosmetic and nothing carried the
+        # setup. Two things changed: these ids are about to be permanent (App
+        # Store Connect does not let you rename or reuse one, so the last moment
+        # to fix `.weather` — a generic word, for the flagship app, that does
+        # not even say Vane — is before TestFlight), and `SettingsSync` now
+        # carries station and home between devices. What the rename actually
+        # costs is `homeFacing` and `hasSeenSetup`, which deliberately do not
+        # sync — and `AppSettings.migrateLegacyDefaults` brings those across
+        # once. The archive was never at risk: it is reached through the app
+        # group, which is not keyed by bundle id.
+        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.mac
         DEVELOPMENT_TEAM: CG68B3UD28
         SWIFT_VERSION: "5.0"
         ENABLE_HARDENED_RUNTIME: YES
         CODE_SIGN_ENTITLEMENTS: Weather/Weather.entitlements
         INFOPLIST_KEY_NSHumanReadableCopyright: ""
+        INFOPLIST_KEY_CFBundleDisplayName: Vane
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.weather
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
         MARKETING_VERSION: "0.1"
         CURRENT_PROJECT_VERSION: "1"
+
+  # The SAME sources as the Mac app, deliberately — not a VaneTV-style
+  # reimplementation. VaneTV has its own views because a ten-foot deck driven by
+  # a remote is a different app that shares a domain; an iPad running the sidebar
+  # app is this app on a slightly smaller screen with a finger for a pointer.
+  # `NavigationSplitView` already collapses correctly on its own, so what was
+  # actually needed was a map that speaks UIKit and four fenced modifiers. See
+  # `PlatformBridge`.
+  VaneiOS:
+    type: application
+    platform: iOS
+    sources:
+      - Weather
+    dependencies:
+      - package: WeatherKit
+    settings:
+      base:
+        PRODUCT_NAME: Vane
+        # Distinct from the Mac app's. Nothing migrates between them — the
+        # archive on an iPad is filled from WeatherFlow, not copied off a Mac —
+        # so the reason to keep the Mac id frozen does not apply here.
+        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios
+        DEVELOPMENT_TEAM: CG68B3UD28
+        CODE_SIGN_ENTITLEMENTS: Weather/VaneiOS.entitlements
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_CFBundleDisplayName: Vane
+        INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.weather
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
+          UIInterfaceOrientationPortrait
+          UIInterfaceOrientationLandscapeLeft
+          UIInterfaceOrientationLandscapeRight
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        # iPad only TODAY, while the id says iOS. Not a contradiction — the id
+        # is permanent and the device family is a build setting. Naming this
+        # `.ipad` would have committed the phone to being a SECOND app on the
+        # store before there is a phone app at all; `.ios` stays true whether
+        # this widens to universal or the phone gets its own listing later.
+        TARGETED_DEVICE_FAMILY: "2"
+        # NO APP-GROUP ENTITLEMENT, on purpose. `AppGroup.resolve` falls back to
+        # Application Support when the container is nil, which on iOS is already
+        # the app's own sandboxed directory — the right home. A group is only
+        # worth claiming once something else (a widget) needs to read the archive,
+        # and claiming one that isn't in the profile fails the signature.
+
+  VaneTV:
+    type: application
+    platform: tvOS
+    sources:
+      - VaneTV
+    dependencies:
+      - package: WeatherKit
+    settings:
+      base:
+        PRODUCT_NAME: Vane
+        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.tv
+        DEVELOPMENT_TEAM: CG68B3UD28
+        CODE_SIGN_ENTITLEMENTS: VaneTV/VaneTV.entitlements
+        SWIFT_VERSION: "5.0"
+        GENERATE_INFOPLIST_FILE: YES
+        ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
+        MARKETING_VERSION: "0.1"
+        CURRENT_PROJECT_VERSION: "1"
+        TARGETED_DEVICE_FAMILY: "3"
+
+# Declared rather than left to Xcode. Xcode invents a scheme the first time you
+# open a target and stores it under xcuserdata, which `xcodegen generate` then
+# wipes — so the Mac scheme kept vanishing after every project regeneration
+# while the tvOS one happened to survive. Named here, both are generated every
+# time and shared, which also means CI and a fresh clone see the same two.
+schemes:
+  Vane:
+    build:
+      targets:
+        Vane: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  VaneiOS:
+    build:
+      targets:
+        VaneiOS: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+
+  VaneTV:
+    build:
+      targets:
+        VaneTV: all
+    run:
+      config: Debug
+    archive:
+      config: Release

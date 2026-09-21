@@ -92,30 +92,6 @@ extension HazardWatch.State {
     /// outline for. A zone product has no finer boundary than a county, and
     /// inventing one on the map would claim a precision the product doesn't have.
     /// Same refusal as `resolution`, one layer out.
-    var drawable: [Hazard] {
-        if case .active(let live) = self { return live.filter { $0.shape != nil } }
-        return []
-    }
-}
-
-extension Hazard {
-    /// Colour reads off `level`, not off the kind — so the normalized scale is
-    /// what the eye sorts by, and a heat advisory can never out-shout a warning
-    /// just because fire is red.
-    var tint: Color { Self.tint(forLevel: level) }
-
-    /// Static because the radar draws warning polygons in the same colours from a
-    /// `MKPolygon` subclass that carries only the level. One ramp, so the outline
-    /// on the map and the row in the banner can never disagree about how serious
-    /// the same warning is.
-    static func tint(forLevel level: Double) -> Color {
-        switch level {
-        case 0.9...:    return .red
-        case 0.7..<0.9: return .orange
-        case 0.45..<0.7:return .yellow
-        default:        return .secondary
-        }
-    }
 }
 
 struct HazardBanner: View {

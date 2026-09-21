@@ -222,20 +222,19 @@ struct WeatherArchiveBrowser: View {
         }
     }
 
-    /// The three cards that never took a period. They were the All-time grain
-    /// before there was one to put them under.
+    /// The cards that never took a period. They were the All-time grain before
+    /// there was one to put them under.
+    ///
+    /// Winter chill used to be a third one here and isn't: it is not a fact
+    /// about the record, it is a fact about the YEAR — what the yard banks each
+    /// winter — and it sat between Records and Rainfall with nothing in common
+    /// with either. It's on Rhythms. Rainfall followed it out for the same
+    /// reason and is on Rain, which left Records & streaks alone here — the one
+    /// card that really is about the record rather than about the year.
     @ViewBuilder private var allTimeCards: some View {
         if climate.dayCount >= 30 {
             card(label: "Records & streaks") {
                 StreaksAndRecords(climate: climate, today: today, precipToday: precipToday)
-            }
-        }
-        if climate.dayCount >= 90 {
-            card(label: "Rainfall") {
-                RainfallCard(climate: climate, today: today)
-            }
-            card(label: "Winter chill") {
-                WinterChillCard(climate: climate, today: today)
             }
         }
     }

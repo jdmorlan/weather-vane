@@ -507,7 +507,7 @@ final class SeasonTimelineTests: XCTestCase {
 
     func testTracksAreOrderedByWhicheverEasesFirst() {
         let tracks = station().seasonalTracks(asOf: "2025-08-06", horizonDays: 120)
-        XCTAssertEqual(tracks.map(\.name).prefix(3).map { $0 }, ["Nights", "Humidity", "Afternoons"])
+        XCTAssertEqual(tracks.map(\.name).prefix(3).map { $0 }, ["Nights", "Mugginess", "Afternoons"])
         XCTAssertLessThan(tracks[0].nextInDays, tracks[2].nextInDays)
     }
 
@@ -594,6 +594,50 @@ final class SeasonTimelineTests: XCTestCase {
         let climate = Climatology(records: [])
         XCTAssertTrue(climate.normalCurve(\.tempMax, from: "2025-08-06", days: 10)
             .allSatisfy { $0 == nil })
+    }
+
+    /// The lead sentence is built from these, and it was wrong for half the rows
+    /// while the row NAME was doing the work: "Humidity drop below 65°" and
+    /// "Freeze drop 32°" are both broken English.
+    func testEachRowKnowsHowToBeSaidOutLoud() {
+        let autumn = station().seasonalTracks(asOf: "2025-08-06", horizonDays: 120)
+        for track in autumn {
+            guard let milestone = track.milestones.first else { continue }
+            let said = track.phrase(milestone)
+            XCTAssertFalse(said.subject.isEmpty, track.name)
+            XCTAssertFalse(said.verb.isEmpty, track.name)
+            // Plural subjects take a plural verb and a plural pronoun; the other
+            // two rows must not claim one.
+            XCTAssertEqual(said.plural, track.measure == .afternoons || track.measure == .nights,
+                           track.name)
+        }
+        let muggy = autumn.first { $0.measure == .humidity }
+        let said = muggy.map { $0.phrase($0.milestones[0]) }
+        XCTAssertEqual(said?.subject, "The air")
+        XCTAssertTrue(said?.verb.contains("dries below") ?? false)
+        // The row's pills read "65°", so the sentence has to name the unit.
+        XCTAssertTrue(said?.verb.contains("dew point") ?? false)
+    }
+
+    /// Direction changes the words, not just the dates — "the first 32° night
+    /// arrives" and "the last 32° night passes" are opposite facts.
+    func testTheFreezeRowSpeaksDifferentlyComingAndGoing() {
+        let autumn = station().seasonalTracks(asOf: "2025-10-15", horizonDays: 75)
+        let falling = autumn.first { $0.measure == .freeze }
+        XCTAssertEqual(falling.map { $0.phrase($0.milestones[0]).subject }, "The first 32° night")
+        XCTAssertEqual(falling.map { $0.phrase($0.milestones[0]).verb }, "arrives")
+
+        // Built directly rather than from the fixture, which is a climate with
+        // no spring frost at all — the right answer there is no freeze row, and
+        // a row that doesn't exist can't be asked how it speaks.
+        let thaw = SeasonMilestone(label: "32°", threshold: 32, monthDay: "03-05",
+                                   daysFromNow: 40, earliest: "02-26", latest: "03-14",
+                                   yearsObserved: 3)
+        let rising = SeasonTrack(name: "Last freeze", measure: .freeze, symbol: "snowflake",
+                                 milestones: [thaw], cooling: false)
+        XCTAssertEqual(rising.phrase(thaw).subject, "The last 32° night")
+        XCTAssertEqual(rising.phrase(thaw).verb, "passes")
+        XCTAssertFalse(rising.phrase(thaw).plural)
     }
 
     /// A date rolls to next year once it's passed, so nothing reads as overdue.
@@ -760,5 +804,217 @@ extension SeasonTimelineTests {
         XCTAssertTrue(tracks.allSatisfy { track in
             track.milestones.allSatisfy { ($0.normalDaysFromNow ?? 0) >= -Climatology.overdueLimitDays }
         })
+    }
+}
+
+// MARK: - The year axis
+
+final class YearRhythmTests: XCTestCase {
+
+    /// A station whose year has a known shape in BOTH directions, so a chart
+    /// that only reads one of them fails visibly.
+    ///
+    /// Nights climb past 65 in April and fall back in September; afternoons
+    /// reach 85 in May and ease in October; frost lands in March and November.
+    /// The frost dates move year to year on purpose — a window with no width
+    /// can't test that the window is drawn.
+    private func station(years: ClosedRange<Int> = 2021...2024) -> Climatology {
+        var records: [DailyRecord] = []
+        for year in years {
+            // Two days of drift per year, so earliest and latest differ.
+            let drift = year - years.lowerBound
+            var cursor = "\(year)-01-01"
+            while cursor <= "\(year)-12-31" {
+                let monthDay = DayKey.monthDay(of: cursor)
+                var record = DailyRecord(day: cursor, sampleCount: 48, expectedSamples: 48)
+                let warm = monthDay >= "04-10" && monthDay < "09-10"
+                record.tempMin = warm ? 70 : 50
+                record.tempMax = (monthDay >= "05-10" && monthDay < "10-10") ? 92 : 78
+                record.dewPointMean = warm ? 68 : 55
+                if let spring = DayKey.step("\(year)-03-05", by: drift),
+                   let fall = DayKey.step("\(year)-11-12", by: drift),
+                   cursor == spring || cursor == fall {
+                    record.tempMin = 30
+                }
+                record.schemaVersion = DailyRecord.currentSchemaVersion
+                records.append(record)
+                guard let next = DayKey.next(cursor) else { break }
+                cursor = next
+            }
+        }
+        return Climatology(records: records)
+    }
+
+    // MARK: The axis itself
+
+    func testTheAxisRunsJanuaryFirstToDecemberThirtyFirst() {
+        XCTAssertEqual(YearAxis.day(of: "01-01"), 0)
+        XCTAssertEqual(YearAxis.day(of: "12-31"), YearAxis.dayCount - 1)
+        XCTAssertEqual(YearAxis.monthDay(of: 0), "01-01")
+        XCTAssertEqual(YearAxis.monthDay(of: YearAxis.dayCount - 1), "12-31")
+        XCTAssertEqual(YearAxis.monthMarks.count, 12)
+        XCTAssertEqual(YearAxis.monthMarks.map(\.start), YearAxis.monthStart)
+    }
+
+    /// The axis is leap-shaped, so a leap day is a day like any other rather
+    /// than something folded onto the 28th.
+    func testFebruaryTwentyNinthIsItsOwnSlot() {
+        XCTAssertEqual(YearAxis.day(of: "02-29"), 59)
+        XCTAssertEqual(YearAxis.day(of: "02-28").map { $0 + 1 }, YearAxis.day(of: "02-29"))
+        XCTAssertEqual(YearAxis.monthDay(of: 59), "02-29")
+    }
+
+    // MARK: Both directions
+
+    /// The whole reason this exists: the countdown can only ever show the half
+    /// of the year it's pointing at.
+    func testEveryRowCarriesBothDirections() {
+        let tracks = station().yearRhythm()
+        XCTAssertFalse(tracks.isEmpty)
+        for track in tracks {
+            XCTAssertTrue(track.milestones.contains { $0.direction == .arriving }, track.name)
+            XCTAssertTrue(track.milestones.contains { $0.direction == .easing }, track.name)
+        }
+    }
+
+    /// Spring crossings come before autumn ones, and within a row the whole set
+    /// reads forward along the calendar.
+    func testMilestonesRunForwardThroughTheYear() {
+        for track in station().yearRhythm() {
+            let slots = track.milestones.map(\.dayOfYear)
+            XCTAssertEqual(slots, slots.sorted(), track.name)
+            for milestone in track.milestones {
+                XCTAssertTrue((0..<YearAxis.dayCount).contains(milestone.dayOfYear))
+            }
+        }
+    }
+
+    /// The answer must not depend on when it is asked — that is the difference
+    /// between this and `seasonalTracks`.
+    func testTheYearReadsTheSameWheneverItIsAsked() {
+        let climate = station()
+        XCTAssertEqual(climate.yearRhythm(), climate.yearRhythm())
+    }
+
+    func testNightsWarmInSpringAndLetGoInAutumn() {
+        let nights = station().yearRhythm().first { $0.measure == .nights }
+        let arriving = nights?.milestones.first { $0.direction == .arriving && $0.threshold == 65 }
+        let easing = nights?.milestones.first { $0.direction == .easing && $0.threshold == 65 }
+        // The smoothed crossing lands within a few days of the fixture's step.
+        XCTAssertEqual(arriving.map { $0.monthDay.prefix(2) }, "04")
+        XCTAssertEqual(easing.map { $0.monthDay.prefix(2) }, "09")
+    }
+
+    // MARK: The window
+
+    /// The spread is the point of a year-long axis. A milestone that only
+    /// carries its median has lost the thing this chart was built to draw.
+    func testAMilestoneCarriesTheWindowTheRecordHasSeenItIn() {
+        let freeze = station().yearRhythm().first { $0.measure == .freeze }
+        let first = freeze?.milestones.first { $0.direction == .easing && $0.threshold == 32 }
+        XCTAssertNotNil(first?.earliest)
+        XCTAssertNotNil(first?.latest)
+        // Four years, drifting a day apart each: a three-day window.
+        XCTAssertEqual(first?.spreadDays, 3)
+        XCTAssertLessThanOrEqual(first!.earliest!, first!.dayOfYear)
+        XCTAssertGreaterThanOrEqual(first!.latest!, first!.dayOfYear)
+    }
+
+    /// A window that straddles the new year would have to be drawn the short way
+    /// round on a January-to-December axis, which says the opposite of what the
+    /// record says. It keeps its date and drops the band.
+    func testAWindowThatWrapsTheNewYearIsNotDrawn() {
+        var records: [DailyRecord] = []
+        for year in 2021...2024 {
+            var cursor = "\(year)-01-01"
+            while cursor <= "\(year)-12-31" {
+                var record = DailyRecord(day: cursor, sampleCount: 48, expectedSamples: 48)
+                record.tempMin = 50
+                record.tempMax = 78
+                // Frost on New Year's Eve in two years and New Year's Day in two:
+                // the same event, a day apart, on opposite ends of the axis.
+                let monthDay = DayKey.monthDay(of: cursor)
+                if (year.isMultiple(of: 2) && monthDay == "12-31")
+                    || (!year.isMultiple(of: 2) && monthDay == "01-01") {
+                    record.tempMin = 30
+                }
+                record.schemaVersion = DailyRecord.currentSchemaVersion
+                records.append(record)
+                guard let next = DayKey.next(cursor) else { break }
+                cursor = next
+            }
+        }
+        let freeze = Climatology(records: records).yearRhythm().first { $0.measure == .freeze }
+        for milestone in freeze?.milestones ?? [] where milestone.earliest != nil {
+            XCTAssertLessThanOrEqual(milestone.earliest!, milestone.dayOfYear, "\(milestone.id)")
+            XCTAssertGreaterThanOrEqual(milestone.latest!, milestone.dayOfYear, "\(milestone.id)")
+        }
+    }
+
+    // MARK: The frost-free span
+
+    /// The headline fact of the page, drawn as a distance rather than left to be
+    /// subtracted out of two marks.
+    func testTheFreezeRowCarriesTheFrostFreeSpan() {
+        let freeze = station().yearRhythm().first { $0.measure == .freeze }
+        let span = freeze?.span
+        XCTAssertNotNil(span)
+        XCTAssertEqual(span?.label, "Frost-free")
+        // March 5-ish to November 12-ish is about eight months.
+        XCTAssertEqual(Double(span?.days ?? 0), 252, accuracy: 6)
+        XCTAssertLessThan(span!.from, span!.to)
+    }
+
+    func testOnlyTheFreezeRowGetsASpan() {
+        for track in station().yearRhythm() where track.measure != .freeze {
+            XCTAssertNil(track.span, track.name)
+        }
+    }
+
+    // MARK: The strip
+
+    /// One value per slot, or every shade on the row sits a day off.
+    func testEachRowCarriesOneNormalPerDayOfTheYear() {
+        for track in station().yearRhythm() {
+            XCTAssertEqual(track.normal.count, YearAxis.dayCount, track.name)
+            XCTAssertTrue(track.normal.contains { $0 != nil }, track.name)
+        }
+    }
+
+    /// Warm is warm on every row, all year. A direction-of-travel ramp — which
+    /// is right for a countdown — would draw half this axis inside out.
+    func testTheRampIsWarmToColdAndSpansTheThresholdsAndTheCurve() {
+        for track in station().yearRhythm() {
+            let values = track.normal.compactMap { $0 } + track.milestones.map(\.threshold)
+            XCTAssertEqual(track.rampWarm, values.max(), track.name)
+            XCTAssertEqual(track.rampCold, values.min(), track.name)
+            XCTAssertGreaterThan(track.rampWarm, track.rampCold, track.name)
+            XCTAssertEqual(track.intensity(track.rampWarm), 1, accuracy: 0.001)
+            XCTAssertEqual(track.intensity(track.rampCold), 0, accuracy: 0.001)
+            for value in values {
+                XCTAssertTrue((0...1).contains(track.intensity(value)))
+            }
+        }
+    }
+
+    /// A gap in the archive draws as a gap here too — a year axis is a much
+    /// bigger canvas on which to paint weather that was never watched.
+    func testDaysTheArchiveCannotAnswerStayNil() {
+        let summer = station(years: 2022...2024).yearRhythm()
+        XCTAssertFalse(summer.isEmpty)
+        let empty = Climatology(records: []).yearRhythm()
+        XCTAssertTrue(empty.isEmpty, "no record means no rows, not blank rows")
+    }
+
+    /// Mugginess is a dew point, and a row whose pills read "65°" has to be able
+    /// to say that the degrees aren't air temperature.
+    func testTheMugginessRowNamesItsUnit() {
+        let tracks = station().yearRhythm()
+        let muggy = tracks.first { $0.measure == .humidity }
+        XCTAssertEqual(muggy?.name, "Mugginess")
+        XCTAssertEqual(muggy?.unitNote, "° dew point")
+        for track in tracks where track.measure != .humidity {
+            XCTAssertEqual(track.unitNote, "°", track.name)
+        }
     }
 }

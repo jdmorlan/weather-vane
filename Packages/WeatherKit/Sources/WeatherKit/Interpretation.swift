@@ -155,6 +155,14 @@ public struct DayNote: Equatable, Sendable, Identifiable {
     public var conditions: String
     public var icon: String
     public var precipProbability: Double?
+    /// Expected accumulation, inches, summed from that day's hourly forecast.
+    ///
+    /// NOT from the daily payload, which carries a probability and no amount at
+    /// all — and a probability alone cannot separate the two days people most
+    /// need separated: a 20% chance of a hundredth, and a 20% chance of an inch.
+    /// Nil when the hourly forecast does not reach that far, which is a real
+    /// state and must not be shown as 0.00.
+    public var precipTotal: Double?
     public var sunrise: Int?
     public var sunset: Int?
     /// Estimated peak (muggiest) daytime dew point, °F — computed from the hourly
@@ -550,10 +558,18 @@ public enum WeatherInterpreter {
         }
         let allDews = hours.compactMap(hourDewPoint)
 
+        // Summed rather than taken from the daily payload, which has no amount.
+        // `nil` when the hourly forecast has not reached this day — the far end
+        // of a ten-day has no hours behind it, and reporting that as 0.00 would
+        // promise a dry day the forecast never claimed.
+        let precipTotal: Double? = hours.isEmpty
+            ? nil : hours.compactMap(\.precip).reduce(0, +)
+
         return DayNote(epoch: epoch, weekday: weekday,
                        high: d.airTempHigh, low: d.airTempLow,
                        conditions: d.conditions ?? "—", icon: d.icon ?? "cloudy",
                        precipProbability: d.precipProbability,
+                       precipTotal: precipTotal,
                        sunrise: d.sunrise, sunset: d.sunset,
                        dewPoint: daytimeDews.max(),
                        comfortTag: daytimeDews.max().map { dewComfortTag($0) } ?? "",

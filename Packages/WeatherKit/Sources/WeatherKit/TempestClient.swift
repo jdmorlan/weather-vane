@@ -15,7 +15,10 @@ public struct TempestClient: Sendable {
     /// The numeric station id (not the device id).
     public let stationID: Int
 
-    private let session: URLSession
+    /// Internal rather than private so `StationHealth`s device calls can reuse
+    /// the same session instead of quietly falling back to `.shared` — a test
+    /// that injects a stub session must have it apply to every call.
+    let session: URLSession
 
     public init(token: String, stationID: Int, session: URLSession = .shared) {
         self.token = token

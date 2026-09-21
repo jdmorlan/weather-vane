@@ -55,6 +55,17 @@ func windBandColor(_ index: Int, of count: Int) -> Color {
 struct WindRoseChart: View {
     let rose: WindRose
     var size: CGFloat = 300
+    /// The sector the pointer is over. Owned by the parent because the readout
+    /// beside the chart is driven by it — the rose and the panel are one
+    /// instrument, not a picture with a caption.
+    @Binding var hovered: Int?
+    /// A sector clicked to hold, so you can read the numbers without keeping the
+    /// mouse still. Clicking the same petal again releases it.
+    @Binding var pinned: Int?
+
+    /// What the readout should describe: what you're pointing at, else what you
+    /// pinned.
+    private var active: Int? { hovered ?? pinned }
 
     /// Ring spacing chosen from the data rather than fixed, so a station with a
     /// tight rose doesn't draw every petal inside the first ring.
@@ -75,19 +86,53 @@ struct WindRoseChart: View {
 
     private var outer: Double { Double(rings) * ringStep }
 
-    var body: some View {
-        Canvas { context, canvasSize in
-            let side = min(canvasSize.width, canvasSize.height)
-            let center = CGPoint(x: canvasSize.width / 2, y: canvasSize.height / 2)
-            // Leaves room for the compass letters outside the outermost ring.
-            let radius = side / 2 - 18
+    /// Centre and radius, computed once from `size` so the DRAWING and the
+    /// HIT-TESTING cannot drift apart. Deriving them twice is how an interactive
+    /// chart ends up highlighting the petal next to the one you're pointing at.
+    private var center: CGPoint { CGPoint(x: size / 2, y: size / 2) }
+    /// Leaves room for the compass letters outside the outermost ring.
+    private var radius: CGFloat { size / 2 - 18 }
 
+    var body: some View {
+        Canvas { context, _ in
             drawGrid(&context, center: center, radius: radius)
             drawPetals(&context, center: center, radius: radius)
             drawLabels(&context, center: center, radius: radius)
         }
         .frame(width: size, height: size)
+        .contentShape(Rectangle())
+        .onContinuousHover { phase in
+            switch phase {
+            case .active(let point): hovered = sector(at: point)
+            case .ended: hovered = nil
+            }
+        }
+        .onTapGesture { point in
+            guard let hit = sector(at: point) else { pinned = nil; return }
+            pinned = (pinned == hit) ? nil : hit
+        }
+        .animation(.easeOut(duration: 0.12), value: active)
         .accessibilityLabel(accessibilityText)
+    }
+
+    /// Which petal a point falls in, or nil outside the rose.
+    ///
+    /// Empty sectors return nil rather than their index: a petal that isn't
+    /// drawn can't be pointed at, and highlighting a blank wedge would imply
+    /// the archive has something to say about it.
+    private func sector(at point: CGPoint) -> Int? {
+        let dx = point.x - center.x
+        let dy = point.y - center.y
+        let r = (dx * dx + dy * dy).squareRoot()
+        guard r <= radius else { return nil }
+        // Same frame as `point(_:_:bearing:)`: 0 is up, turning clockwise.
+        var bearing = atan2(Double(dx), Double(-dy)) * 180 / .pi
+        if bearing < 0 { bearing += 360 }
+        let index = Int((bearing / 22.5).rounded()) % 16
+        guard let hit = rose.sectors.first(where: { $0.index == index }), hit.minutes > 0 else {
+            return nil
+        }
+        return index
     }
 
     private func point(_ center: CGPoint, _ radius: CGFloat, bearing: Double) -> CGPoint {
@@ -147,8 +192,25 @@ struct WindRoseChart: View {
                     path.addLine(to: center)
                 }
                 path.closeSubpath()
-                context.fill(path, with: .color(windBandColor(band, of: rose.bands.count)))
+                // Everything recedes when one petal is active, so the shape you
+                // asked about separates from the fifteen you didn't.
+                let dim = active != nil && active != sector.index
+                context.fill(path, with: .color(windBandColor(band, of: rose.bands.count)
+                    .opacity(dim ? 0.32 : 1)))
             }
+        }
+
+        // The active petal's outline, drawn last so it sits over every band.
+        if let active, let sector = rose.sectors.first(where: { $0.index == active }),
+           sector.minutes > 0 {
+            let r = radius * CGFloat(min(1, (sector.fraction) / outer))
+            var path = Path()
+            let start = Angle.degrees(sector.degrees - half - 90)
+            let end = Angle.degrees(sector.degrees + half - 90)
+            path.addArc(center: center, radius: r, startAngle: start, endAngle: end, clockwise: false)
+            path.addLine(to: center)
+            path.closeSubpath()
+            context.stroke(path, with: .color(.primary.opacity(0.55)), lineWidth: 1.5)
         }
     }
 
@@ -195,65 +257,6 @@ struct WindBandLegend: View {
     }
 }
 
-// MARK: - The year
-
-/// Monthly mean speed as bars, with each month's prevailing direction beneath.
-///
-/// A bar chart rather than twelve small roses: the question "when is it strongest"
-/// is a comparison of one number across twelve categories, which is the plainest
-/// thing a bar chart does. The direction rides underneath as an arrow because it's
-/// a second variable on the same axis, not a second chart.
-struct WindSeasonChart: View {
-    let climate: WindClimate
-
-    private var months: [(month: Int, rose: WindRose)] {
-        (1...12).compactMap { m in climate.byMonth[m].map { (m, $0) } }
-    }
-
-    private var peak: Double {
-        max(1, months.map(\.rose.meanSpeed).max() ?? 1)
-    }
-
-    var body: some View {
-        HStack(alignment: .bottom, spacing: 6) {
-            ForEach(months, id: \.month) { entry in
-                VStack(spacing: 5) {
-                    Text(String(format: "%.1f", entry.rose.meanSpeed))
-                        .font(.system(size: 9).monospacedDigit()).foregroundStyle(.secondary)
-                    RoundedRectangle(cornerRadius: 3)
-                        .fill(barColor(entry))
-                        .frame(height: max(3, CGFloat(entry.rose.meanSpeed / peak) * 92))
-                    if let arc = entry.rose.dominantArc() {
-                        Image(systemName: "arrow.up")
-                            // The arrow points the way the AIR MOVES — opposite the
-                            // bearing the wind comes from. Drawing it pointing at the
-                            // source is the same off-by-180 the rose's petals avoid,
-                            // and on an arrow it reads as an outright error.
-                            .rotationEffect(.degrees(arc.centerDegrees + 180))
-                            .font(.system(size: 9))
-                            .foregroundStyle(.tertiary)
-                        Text(arc.compass)
-                            .font(.system(size: 9)).foregroundStyle(.tertiary)
-                    }
-                    Text(WindClimate.monthName(entry.month).prefix(1))
-                        .font(.caption2).foregroundStyle(.secondary)
-                }
-                .frame(maxWidth: .infinity)
-            }
-        }
-        .frame(height: 165, alignment: .bottom)
-    }
-
-    /// The windiest and calmest months carry the colour; the rest stay quiet. The
-    /// chart's job is the comparison, and colouring all twelve would make the two
-    /// that answer the question no easier to find than the ten that don't.
-    private func barColor(_ entry: (month: Int, rose: WindRose)) -> Color {
-        if entry.month == climate.windiestMonth?.month { return windBandColor(4, of: 6) }
-        if entry.month == climate.calmestMonth?.month { return windBandColor(0, of: 6) }
-        return Color.secondary.opacity(0.35)
-    }
-}
-
 // MARK: - The surface
 
 struct WindSurface: View {
@@ -261,14 +264,30 @@ struct WindSurface: View {
     /// True degrees the person is looking toward, when they've said.
     let facing: Double?
 
-    private var rose: WindRose { climate.overall }
+    /// The whole record, always. The summary sentences describe the station, not
+    /// whatever month the pointer is resting on.
+    private var allYear: WindRose { climate.overall }
+
+    /// What the rose, the readout and the ladder are all showing: a month when
+    /// one is selected, else the whole record. One property so the three can
+    /// never disagree about which rose they're describing.
+    private var rose: WindRose {
+        activeMonth.flatMap { climate.byMonth[$0] } ?? climate.overall
+    }
+
+    @State private var hovered: Int?
+    @State private var pinned: Int?
+    @State private var hoveredMonth: Int?
+    @State private var pinnedMonth: Int?
+    private var activeMonth: Int? { hoveredMonth ?? pinnedMonth }
+    private var active: WindSector? {
+        (hovered ?? pinned).flatMap { index in rose.sectors.first { $0.index == index } }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             summaryCard
             roseCard
-            seasonCard
-            sectorCard
         }
     }
 
@@ -302,31 +321,261 @@ struct WindSurface: View {
     /// way you're looking. Without a facing there is nothing to say and this
     /// renders nothing — a guessed facing would be worse than none.
     private var facingSentence: String? {
-        guard let facing, let arc = rose.dominantArc() else { return nil }
+        guard let facing, let arc = allYear.dominantArc() else { return nil }
         let feel = Compass.windFeel(from: arc.centerDegrees, facing: facing)
         return "Facing \(Compass.cardinal(facing)), that's wind \(feel) most of the year."
     }
 
+    /// The rose, and everything the old "By direction" table used to say.
+    ///
+    /// THAT TABLE IS GONE, and the rose ate it. Sixteen rows of from/time/
+    /// average/peak-gust sat at the bottom of this surface restating what the
+    /// picture above already drew, in a form nobody reads top to bottom — while
+    /// the rose itself was 300pt of static canvas with a third of the card empty
+    /// beside it. Pointing at a petal answers the same question in the place you
+    /// were already looking, and the space the numbers need was there all along.
+    ///
+    /// A ladder of sixteen bars replaced the table for a while, on the argument
+    /// that the one thing a hover can't do is show all sixteen at once. That
+    /// argument was wrong: the rose IS all sixteen at once, and at 440pt it
+    /// reads them better than a list of percentages. It went the same way the
+    /// table did.
     private var roseCard: some View {
-        card(label: "Where it comes from") {
-            HStack(alignment: .top, spacing: 22) {
-                WindRoseChart(rose: rose)
-                VStack(alignment: .leading, spacing: 16) {
-                    WindBandLegend(bands: rose.bands)
-                    Divider().frame(width: 120)
-                    stat("Calm", String(format: "%.0f%%", rose.calmFraction * 100),
-                         "under 1 mph — direction means nothing here")
-                    stat("Average", String(format: "%.1f mph", rose.meanSpeed), "while it's moving")
-                    stat("Steadiness", String(format: "%.2f", rose.constancy), constancyNote)
-                    if let peak = rose.peakGust {
-                        stat("Hardest gust", String(format: "%.0f mph", peak.speed),
-                             peak.date.formatted(.dateTime.month(.abbreviated).day().year()))
-                    }
+        card(label: activeMonth == nil ? "Where it comes from"
+                                       : "Where it comes from · \(monthName(activeMonth!))") {
+            // TWO COLUMNS, BOTH FULL HEIGHT. The month strip used to span the
+            // whole card above the rose, which made a T: a wide bar over two
+            // things of unequal height, with an orphaned patch of nothing under
+            // the panel. Moving it into the right column gives that column a job
+            // all the way down and leaves one clean division — the chart, and
+            // everything you read about the chart.
+            HStack(alignment: .top, spacing: 30) {
+                VStack(spacing: 10) {
+                    WindRoseChart(rose: rose, size: 460, hovered: $hovered, pinned: $pinned)
+                    Text(hint).font(.caption2).foregroundStyle(.tertiary)
                 }
+                readout
                 Spacer(minLength: 0)
             }
         }
     }
+
+    private var hint: String {
+        if let pinnedMonth { return "Holding \(monthName(pinnedMonth)) · click the month again to release" }
+        if pinned != nil { return "Holding \(rose.sectors[pinned!].compass) · click again to release" }
+        return "Point at a petal for its numbers · click to hold"
+    }
+
+    /// THE MONTH CHART, PROMOTED INTO A CONTROL.
+    ///
+    /// This was its own card — "Around the year", a bar per month with a little
+    /// arrow under it. The bar said how hard and the arrow said roughly which
+    /// way, which is an entire rose compressed to two numbers because there was
+    /// nowhere to put the rose. There is now: `WindClimate.byMonth` has held a
+    /// full `WindRose` per month all along, so pointing at a month can just draw
+    /// it.
+    ///
+    /// Kept as BARS rather than becoming a plain segmented control, because the
+    /// one thing the old card did that hovering can't is let you see at a glance
+    /// which month is the windy one. That comparison stays; the filtering is new.
+    private var monthStrip: some View {
+        let speeds = (1...12).map { climate.byMonth[$0]?.meanSpeed ?? 0 }
+        // All-year is INCLUDED in the scale because it is now drawn as a bar of
+        // its own real value. It used to be a fixed 20pt block, which put it on
+        // a different baseline from the twelve beside it and read as a glitch.
+        // Its mean speed is directly comparable to a month's, so drawing it to
+        // the same scale is both tidier and more honest — it doubles as the
+        // reference line you'd otherwise want across the months.
+        let peak = max(0.1, (speeds + [allYear.meanSpeed]).max() ?? 1)
+        return VStack(alignment: .leading, spacing: 6) {
+            HStack(alignment: .bottom, spacing: 5) {
+                monthCell(nil, height: CGFloat(allYear.meanSpeed / peak),
+                          label: "All", speed: allYear.meanSpeed)
+                // A rule rather than a gap: it says "the thing on the left is a
+                // different kind of thing" without leaving a hole in the row.
+                Rectangle().fill(Color.primary.opacity(0.12))
+                    .frame(width: 1, height: 58)
+                    .padding(.horizontal, 3)
+                ForEach(1...12, id: \.self) { m in
+                    monthCell(m, height: CGFloat(speeds[m - 1] / peak),
+                              label: monthName(m), speed: speeds[m - 1])
+                }
+            }
+            Text("Average speed by month, in mph. Point at one to draw that month’s rose.")
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
+    }
+
+    private func monthCell(_ month: Int?, height: CGFloat, label: String, speed: Double) -> some View {
+        let isActive = activeMonth == month
+        let missing = month != nil && climate.byMonth[month!] == nil
+        return VStack(spacing: 4) {
+            Text(speed > 0 ? String(format: "%.1f", speed) : "—")
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(isActive ? .primary : .tertiary)
+            RoundedRectangle(cornerRadius: 3)
+                .fill(isActive ? AnyShapeStyle(.tint)
+                      : AnyShapeStyle(Color.secondary.opacity(missing ? 0.10 : 0.30)))
+                .frame(height: max(3, 54 * height))
+            // ONE LINE, ALWAYS. "All year" wrapped to two and made that cell
+            // taller than the twelve beside it; with the row bottom-aligned,
+            // the extra line pushed its bar up off the shared baseline. The
+            // label is the thing that has to give, not the alignment.
+            Text(label)
+                .font(.system(size: 9, weight: isActive ? .semibold : .regular))
+                .foregroundStyle(isActive ? .primary : .secondary)
+                .lineLimit(1)
+                .fixedSize()
+        }
+        // Narrower than before: thirteen of these now share a column with the
+        // panel rather than the whole card width.
+        .frame(width: 38)
+        .contentShape(Rectangle())
+        .opacity(missing ? 0.45 : 1)
+        .onHover { inside in
+            guard !missing else { return }
+            hoveredMonth = inside ? month : nil
+            // A month change invalidates a pinned PETAL: the sector you were
+            // holding may not even exist in the month now on screen.
+            if inside { hovered = nil }
+        }
+        .onTapGesture {
+            guard !missing else { return }
+            pinnedMonth = (pinnedMonth == month) ? nil : month
+            pinned = nil
+        }
+        .help(missing ? "No archived days in \(label) yet" : "")
+    }
+
+    private func monthName(_ month: Int) -> String {
+        WeatherAlmanac.monthName(String(format: "%02d", month), long: false)
+    }
+
+    /// One panel, two states. With nothing selected it describes the whole
+    /// record; with a petal active it describes that quarter. Same slot, so the
+    /// card doesn't reflow under the pointer.
+    /// THE PANEL IS A LAYOUT, NOT A LIST.
+    ///
+    /// It was one 300pt column with everything stacked down it, beside a card
+    /// about 1,280pt wide — roughly 500pt of horizontal room sat unused while
+    /// the content ran off the bottom. Spreading it out is not decoration: it
+    /// also fixes the hover jump STRUCTURALLY rather than by reserving blank
+    /// space: the figures sit in a ROW whose height is identical whether it
+    /// holds four all-year numbers or three for one sector.
+    ///
+    /// AN "EVERY QUARTER" LADDER USED TO SIT HERE and has gone. It was carried
+    /// over from the deleted table on the argument that it let you compare all
+    /// sixteen sectors at once — but that is precisely what the rose is, and at
+    /// 440pt it does it better. Sixteen bars restating the petals beside them
+    /// was the same duplication the table had been guilty of, one layout later.
+    @ViewBuilder private var readout: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            monthStrip
+            Divider()
+            heading
+            statsRow
+            Divider()
+            detailColumn
+        }
+    }
+
+    /// One line, always present, so the top of the panel never moves.
+    private var heading: some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            if let sector = active {
+                Text("From \(sector.compass)").font(.title2.weight(.medium))
+                if isDominant(sector) {
+                    Text("prevailing").font(.caption.weight(.semibold))
+                        .padding(.horizontal, 7).padding(.vertical, 2)
+                        .background(Color.accentColor.opacity(0.18), in: Capsule())
+                }
+            } else {
+                Text(activeMonth == nil ? "The whole record" : monthName(activeMonth!))
+                    .font(.title2.weight(.medium))
+                Text("point at a quarter to narrow it")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    /// Figures across rather than down, and a fixed row height — which is what
+    /// stops the card shifting under the pointer.
+    @ViewBuilder private var statsRow: some View {
+        HStack(alignment: .top, spacing: 30) {
+            if let sector = active {
+                stat("Time", String(format: "%.1f%%", sector.fraction * 100),
+                     "of moving hours")
+                stat("Average", String(format: "%.1f mph", sector.meanSpeed),
+                     "while it blew from here")
+                stat("Peak gust", sector.peakGust.map { String(format: "%.0f mph", $0) } ?? "—",
+                     "out of this quarter")
+            } else {
+                stat("Calm", String(format: "%.0f%%", rose.calmFraction * 100),
+                     "under 1 mph")
+                stat("Average", String(format: "%.1f mph", rose.meanSpeed), "while it's moving")
+                stat("Steadiness", String(format: "%.2f", rose.constancy), constancyNote)
+                if let peak = rose.peakGust {
+                    stat("Hardest gust", String(format: "%.0f mph", peak.speed),
+                         peak.date.formatted(.dateTime.month(.abbreviated).day().year()))
+                }
+            }
+            Spacer(minLength: 0)
+        }
+        .frame(height: 54, alignment: .top)
+    }
+
+    /// Left half of the lower row: what the colours mean, and — with a petal
+    /// active — how that quarter's own hours split across them.
+    @ViewBuilder private var detailColumn: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let sector = active {
+                Text("HOW HARD, FROM \(sector.compass)")
+                    .font(.caption2.weight(.semibold)).tracking(0.5).foregroundStyle(.secondary)
+                // The split the old table could never show: a rare sector that is
+                // mostly hard wind is a different fact from a common one that is
+                // mostly light, and the radial stack encodes it in a way nobody
+                // can read off.
+                GeometryReader { geo in
+                    HStack(spacing: 1) {
+                        ForEach(Array(sector.bandMinutes.enumerated()), id: \.offset) { band, minutes in
+                            if minutes > 0 {
+                                windBandColor(band, of: rose.bands.count)
+                                    .frame(width: max(1, geo.size.width
+                                                      * CGFloat(minutes / max(1, sector.minutes))))
+                            }
+                        }
+                    }
+                    .frame(height: 16)
+                    .clipShape(RoundedRectangle(cornerRadius: 3))
+                }
+                .frame(height: 16)
+                Text(bandBreakdown(sector))
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Divider().padding(.vertical, 4)
+            }
+            Text("SPEED BANDS")
+                .font(.caption2.weight(.semibold)).tracking(0.5).foregroundStyle(.secondary)
+            WindBandLegend(bands: rose.bands)
+        }
+        .frame(maxWidth: 420, alignment: .topLeading)
+    }
+
+
+    /// "Mostly 4–13 mph; 6% above 19." The two facts the bar is for.
+    private func bandBreakdown(_ sector: WindSector) -> String {
+        guard sector.minutes > 0 else { return "" }
+        let shares = sector.bandMinutes.map { $0 / sector.minutes }
+        guard let topIndex = shares.indices.max(by: { shares[$0] < shares[$1] }) else { return "" }
+        let top = rose.bands[topIndex]
+        let upper = top.upper.map { String(format: "%.0f", $0) } ?? "up"
+        let hard = shares.indices.filter { rose.bands[$0].lower >= 19 }.map { shares[$0] }.reduce(0, +)
+        var text = "Mostly \(String(format: "%.0f", top.lower))–\(upper) mph"
+        if hard > 0.005 { text += "; \(String(format: "%.0f%%", hard * 100)) above 19" }
+        return text + "."
+    }
+
 
     private var constancyNote: String {
         switch rose.constancy {
@@ -336,60 +585,6 @@ struct WindSurface: View {
         }
     }
 
-    private var seasonCard: some View {
-        card(label: "Around the year") {
-            VStack(alignment: .leading, spacing: 12) {
-                WindSeasonChart(climate: climate)
-                Text("Average speed by month, in mph. The arrow under each bar points the way the air moves.")
-                    .font(.caption).foregroundStyle(.tertiary)
-            }
-        }
-    }
-
-    /// The numbers behind the picture. A rose is read by shape and this is how you
-    /// check one — including the fact a petal can't show, which is that the rare
-    /// quarters are often the violent ones.
-    private var sectorCard: some View {
-        card(label: "By direction") {
-            VStack(spacing: 0) {
-                HStack {
-                    Text("FROM").frame(width: 44, alignment: .leading)
-                    Text("TIME").frame(width: 60, alignment: .trailing)
-                    Text("AVERAGE").frame(width: 80, alignment: .trailing)
-                    Text("PEAK GUST").frame(width: 90, alignment: .trailing)
-                    Spacer()
-                }
-                .font(.caption2.weight(.semibold)).tracking(0.5).foregroundStyle(.secondary)
-                .padding(.bottom, 6)
-
-                ForEach(rose.sectors.filter { $0.minutes > 0 }, id: \.index) { sector in
-                    HStack {
-                        Text(sector.compass)
-                            .font(.callout.weight(isDominant(sector) ? .semibold : .regular))
-                            .frame(width: 44, alignment: .leading)
-                        Text(String(format: "%.1f%%", sector.fraction * 100))
-                            .frame(width: 60, alignment: .trailing)
-                        Text(String(format: "%.1f", sector.meanSpeed))
-                            .frame(width: 80, alignment: .trailing)
-                        Text(sector.peakGust.map { String(format: "%.0f", $0) } ?? "—")
-                            .frame(width: 90, alignment: .trailing)
-                        // The bar is the same fraction the rose draws radially —
-                        // the table and the picture must never disagree.
-                        GeometryReader { geo in
-                            RoundedRectangle(cornerRadius: 2)
-                                .fill(isDominant(sector) ? windBandColor(3, of: 6) : Color.secondary.opacity(0.25))
-                                .frame(width: geo.size.width * CGFloat(sector.fraction / maxFraction),
-                                       height: 8)
-                                .frame(height: geo.size.height, alignment: .center)
-                        }
-                        .frame(height: 18)
-                    }
-                    .font(.callout.monospacedDigit())
-                    .padding(.vertical, 2)
-                }
-            }
-        }
-    }
 
     private var maxFraction: Double {
         max(0.0001, rose.sectors.map(\.fraction).max() ?? 1)

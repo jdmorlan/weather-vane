@@ -2228,7 +2228,7 @@ struct SeasonalCurve: View {
                 // band, and anything showing through turned the dates into a
                 // second layer of chart to read past.
                 .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color.windowBackground)
                     .shadow(color: .black.opacity(0.35), radius: 10, y: 3))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.18)))
                 .fixedSize()
@@ -2596,7 +2596,7 @@ struct QueryCalendar: View {
                 // Opaque, not a material: it sits over the grid, and squares showing through would read as
                 // a second layer of chart behind the numbers.
                 .background(RoundedRectangle(cornerRadius: 8)
-                    .fill(Color(nsColor: .windowBackgroundColor))
+                    .fill(Color.windowBackground)
                     .shadow(color: .black.opacity(0.35), radius: 10, y: 3))
                 .overlay(RoundedRectangle(cornerRadius: 8).stroke(Color.primary.opacity(0.18)))
                 .fixedSize()

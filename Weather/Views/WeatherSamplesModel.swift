@@ -35,6 +35,11 @@ final class WeatherSamplesModel: ObservableObject {
     /// empty rose, because a rose of zeros is indistinguishable from a calm.
     @Published private(set) var climate: WindClimate?
 
+    /// The shape of a day here, month by month. Comes out of the SAME fold as
+    /// the rose — see `SampleClimateCache` — so it costs nothing extra and
+    /// arrives at the same moment.
+    @Published private(set) var dayShape: DiurnalClimate?
+
     /// Non-nil while days are being fetched.
     @Published private(set) var fillProgress: SampleFillProgress?
     /// Non-nil while the cache is folding days in. Separate from the fill because
@@ -44,17 +49,35 @@ final class WeatherSamplesModel: ObservableObject {
 
     @Published private(set) var lastFailure: SampleFillSummary?
     @Published private(set) var dayCount: Int = 0
+
+    /// Work is in flight that WILL produce a `climate`, but hasn't yet.
+    ///
+    /// THE STATE THAT WAS MISSING, and its absence was a lie rather than a gap.
+    /// `loadCached` reads the cache on a detached task and `fold` rebuilds it off
+    /// the main actor, and during both `climate`, `fillProgress` and
+    /// `foldProgress` are all nil — which is indistinguishable, to the view, from
+    /// having no wind history at all. So Wind confidently said "No wind history
+    /// yet" while the answer was three seconds away on a background queue. A
+    /// reader who believes it goes looking for a bug that isn't there.
+    ///
+    /// Distinct from `foldProgress` because that one carries a FRACTION and only
+    /// appears once the fold is big enough to be worth a bar (> 30 days). This is
+    /// the honest "something is happening" for everything before and around that.
+    @Published private(set) var isPreparing = false
     @Published private(set) var error: String?
 
     let store: FileSampleArchive
-    private let cache: WindClimateCache
+    private let cache: SampleClimateCache
     private var isRunning = false
     private var task: Task<Void, Never>?
 
     init(root: URL? = nil) {
         let weather = root ?? AppGroup.dataDirectory.appendingPathComponent("Weather", isDirectory: true)
         store = FileSampleArchive(root: weather.appendingPathComponent("samples", isDirectory: true))
-        cache = WindClimateCache(url: weather.appendingPathComponent("wind-climate.json"))
+        // Renamed with the cache itself: it stopped being only about wind when
+        // the diurnal fold joined the pass. An old `wind-climate.json` left
+        // beside it is simply ignored and can be deleted.
+        cache = SampleClimateCache(url: weather.appendingPathComponent("sample-climate.json"))
     }
 
     /// Read whatever the cache already holds, without touching the network.
@@ -66,16 +89,26 @@ final class WeatherSamplesModel: ObservableObject {
     func loadCached() {
         guard climate == nil else { return }
         let cache = self.cache
+        isPreparing = true
         Task.detached(priority: .userInitiated) {
-            guard let stored = cache.load() else { return }
-            let climate = stored.climate()
-            await MainActor.run { self.climate = climate }
+            let stored = cache.load()
+            let climate = stored?.climate()
+            let shape = stored?.dayShape()
+            await MainActor.run {
+                // Cleared on EVERY path, including the one where there is no
+                // cache to read. An early return that skipped this is how a
+                // spinner becomes permanent.
+                self.isPreparing = false
+                guard let climate, let shape else { return }
+                self.climate = climate
+                self.dayShape = shape
+            }
         }
         refreshCount()
     }
 
     /// Fetch any days the daily archive holds that the sample archive doesn't,
-    /// then fold whatever landed into the wind cache.
+    /// then fold whatever landed into the sample cache.
     ///
     /// Safe on every launch: a current archive fetches nothing and folds nothing.
     func catchUp(token: String, stationID: Int, daily: FileDailyArchive) {
@@ -142,7 +175,7 @@ final class WeatherSamplesModel: ObservableObject {
         foldProgress = nil
     }
 
-    /// Bring the wind cache up to the archive, off the main actor.
+    /// Bring the sample cache up to the archive, off the main actor.
     ///
     /// Detached rather than merely async: on a cold cache this is sixteen seconds
     /// of JSON decoding, and run anywhere near the main actor it would stop the
@@ -150,7 +183,8 @@ final class WeatherSamplesModel: ObservableObject {
     private func fold() async {
         let cache = self.cache
         let store = self.store
-        let climate = await Task.detached(priority: .userInitiated) { () -> WindClimate in
+        isPreparing = true
+        let built = await Task.detached(priority: .userInitiated) { () -> (wind: WindClimate, day: DiurnalClimate) in
             cache.refresh(from: store) { done, total in
                 Task { @MainActor in
                     // Only worth showing while there's a real wait. A daily fold of
@@ -161,8 +195,10 @@ final class WeatherSamplesModel: ObservableObject {
         }.value
 
         await MainActor.run {
+            self.isPreparing = false
             self.foldProgress = nil
-            self.climate = climate
+            self.climate = built.wind
+            self.dayShape = built.day
         }
     }
 

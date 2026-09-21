@@ -226,6 +226,12 @@ public enum WeatherAlmanac {
 
     public static func inches(_ value: Double) -> String { String(format: "%.2f\"", value) }
 
+    /// A 24-hour hour as "3pm". Forwarded rather than reimplemented so an hour is
+    /// spelled the same way on a card in the app as in a sentence from the
+    /// package — two spellings of 12 o'clock is the kind of difference nobody
+    /// notices until it is in the same screenshot twice.
+    public static func clock(_ hour: Int) -> String { WeatherInterpreter.clock(hour) }
+
     /// "Aug 6" — a `yyyy-MM-dd` key as a date someone can read. Parsed and
     /// rendered in the same fixed zone so the label can't drift a day.
     public static func dayLabel(_ key: String, includeYear: Bool = false) -> String {

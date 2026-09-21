@@ -3,7 +3,8 @@
 //
 //  The 500 mb pattern reader. All of the reading — detrending, the wave profile,
 //  ridges, troughs, which side of the trough you're on — lives in WeatherKit's
-//  `UpperAir.swift`. This file draws it and runs the scrubber.
+//  `UpperAir.swift`. This file draws it; `PatternPlaybar`, at the bottom,
+//  is the transport, pinned to the surface rather than scrolling with the page.
 //
 //  NO MAP, DELIBERATELY. The wave is shown straightened out: longitude along the
 //  bottom, departure from the latitude's mean up the side. Picking a trough out of
@@ -29,6 +30,15 @@ final class UpperAirModel: ObservableObject {
     @Published private(set) var showingFallback = false
     @Published var frameIndex = 0
     @Published var reference: WaveReference = .zonal
+
+    /// The last valid frame index, or 0 when there is no run.
+    var lastFrame: Int { max((run?.frames.count ?? 1) - 1, 0) }
+
+    /// Move the playhead, clamped. ON THE MODEL because the page's arrow keys and
+    /// the floating playbar's buttons are now separate views driving one
+    /// playhead, and two copies of a clamp is how one of them ends up off by one.
+    func go(to index: Int) { frameIndex = min(max(index, 0), lastFrame) }
+    func step(_ delta: Int) { go(to: frameIndex + delta) }
 
     /// The window. Configurable here rather than in Settings: one grid serves the
     /// question, and a panel of bounds would be a control that never changes.
@@ -186,14 +196,17 @@ enum PatternFormat {
 struct UpperAirPatternView: View {
     @ObservedObject var model: UpperAirModel
     let home: GeoPoint?
+    /// Owned by `UpperAirSurface`, because the playbar it drives is now pinned to
+    /// the surface rather than scrolling away inside this page. Declared before
+    /// `retry` so the memberwise init keeps the trailing closure last.
+    @Binding var playing: Bool
     let retry: () -> Void
 
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    @State private var playing = false
     @FocusState private var focus: Control?
-    /// `page` is the whole reader: it holds focus by default so ← and → step the
-    /// days without first having to find and focus the slider.
-    private enum Control { case page, play, slider }
+    /// Only the page now. The play button and slider hold their own focus inside
+    /// `PatternPlaybar`, which is no longer part of this view's focus chain.
+    private enum Control { case page }
 
     var body: some View {
         if let run = model.run, let frame = model.frame {
@@ -247,7 +260,6 @@ struct UpperAirPatternView: View {
             section("500 mb pattern") {
                 VStack(alignment: .leading, spacing: 14) {
                     header(run, frame)
-                    scrubber(run, frame)
                     if model.showingFallback {
                         Label("Showing an older stored run — Open-Meteo couldn’t be reached to check for a newer one.",
                               systemImage: "clock.badge.exclamationmark")
@@ -314,11 +326,13 @@ struct UpperAirPatternView: View {
         .focusEffectDisabled()
         .defaultFocus($focus, .page)
         .onAppear { focus = .page }
-        .onKeyPress(.leftArrow) { step(-1, last: run.frames.count - 1); return .handled }
-        .onKeyPress(.rightArrow) { step(+1, last: run.frames.count - 1); return .handled }
-        .onKeyPress(.home) { playing = false; go(to: 0, last: run.frames.count - 1); return .handled }
-        .onKeyPress(.end) { playing = false; go(to: run.frames.count - 1, last: run.frames.count - 1); return .handled }
-        .onKeyPress(.space) { togglePlay(last: run.frames.count - 1); return .handled }
+        // Stepping pauses playback: reaching for the arrows means you want to
+        // hold a day, not fight the timer for it.
+        .onKeyPress(.leftArrow) { playing = false; model.step(-1); return .handled }
+        .onKeyPress(.rightArrow) { playing = false; model.step(+1); return .handled }
+        .onKeyPress(.home) { playing = false; model.go(to: 0); return .handled }
+        .onKeyPress(.end) { playing = false; model.go(to: model.lastFrame); return .handled }
+        .onKeyPress(.space) { togglePlay(); return .handled }
         // A segmented picker eats ← and → itself — they'd flip the reference
         // instead of the day — so focus comes straight back after choosing one.
         .onChange(of: model.reference) { _, _ in focus = .page }
@@ -343,71 +357,9 @@ struct UpperAirPatternView: View {
         }
     }
 
-    // MARK: Scrubber
-
-    private func scrubber(_ run: UpperAirRun, _ frame: UpperAirFrame) -> some View {
-        let last = run.frames.count - 1
-        return HStack(spacing: 14) {
-            Button {
-                togglePlay(last: last)
-            } label: {
-                Image(systemName: playing ? "pause.fill" : "play.fill")
-                    .frame(width: 22, height: 18)
-            }
-            .focusable()
-            .focused($focus, equals: .play)
-            .focusEffectDisabled()
-            .onKeyPress(.space) { togglePlay(last: last); return .handled }
-            .onKeyPress(.return) { togglePlay(last: last); return .handled }
-            .overlay(focusRing(focus == .play))
-            .accessibilityLabel(playing ? "Pause" : "Play through the forecast days")
-
-            Slider(value: Binding(get: { Double(model.frameIndex) },
-                                  set: { go(to: Int($0.rounded()), last: last) }),
-                   in: 0...Double(max(last, 1)), step: 1)
-                .disabled(last < 1)
-                .focusable()
-                .focused($focus, equals: .slider)
-                .focusEffectDisabled()
-                .onKeyPress(.leftArrow) { step(-1, last: last); return .handled }
-                .onKeyPress(.rightArrow) { step(+1, last: last); return .handled }
-                .onKeyPress(.home) { go(to: 0, last: last); return .handled }
-                .onKeyPress(.end) { go(to: last, last: last); return .handled }
-                .padding(.horizontal, 4)
-                .overlay(focusRing(focus == .slider))
-                .accessibilityLabel("Forecast day")
-                .accessibilityValue("Valid \(PatternFormat.valid(frame.valid)), day \(model.frameIndex + 1) of \(last + 1)")
-
-            Text("\(model.frameIndex + 1) / \(last + 1)")
-                .font(.callout).foregroundStyle(.secondary).monospacedDigit()
-            Text("← → step · space plays")
-                .font(.caption).foregroundStyle(.tertiary)
-        }
-        .task(id: playing) {
-            guard playing else { return }
-            while !Task.isCancelled {
-                try? await Task.sleep(for: .milliseconds(700))
-                guard !Task.isCancelled, playing else { return }
-                go(to: model.frameIndex + 1, last: last)
-                if model.frameIndex >= last { playing = false; return }
-            }
-        }
-    }
-
-    private func togglePlay(last: Int) {
-        if !playing && model.frameIndex >= last { model.frameIndex = 0 }
+    private func togglePlay() {
+        if !playing && model.frameIndex >= model.lastFrame { model.frameIndex = 0 }
         playing.toggle()
-    }
-
-    /// A keyboard step. It pauses playback: reaching for the arrows means you
-    /// want to hold a day, not fight the timer for it.
-    private func step(_ delta: Int, last: Int) {
-        playing = false
-        go(to: model.frameIndex + delta, last: last)
-    }
-
-    private func go(to index: Int, last: Int) {
-        model.frameIndex = min(max(index, 0), last)
     }
 
     private func focusRing(_ on: Bool) -> some View {
@@ -755,7 +707,7 @@ struct HeightTable: View {
             let box = CGRect(x: at.x - size.width / 2 - 3, y: at.y - size.height / 2 - 1,
                              width: size.width + 6, height: size.height + 2)
             context.fill(Path(roundedRect: box, cornerRadius: 3),
-                         with: .color(Color(nsColor: .windowBackgroundColor).opacity(0.92)))
+                         with: .color(Color.windowBackground.opacity(0.92)))
             context.draw(text, at: at)
         }
 
@@ -893,7 +845,7 @@ struct AirColumnView: View {
         for i in 0...6 {
             zig.addLine(to: CGPoint(x: bar.minX + CGFloat(i) * bar.width / 6, y: zy + (i % 2 == 0 ? -3 : 3)))
         }
-        context.stroke(zig, with: .color(Color(nsColor: .windowBackgroundColor)), lineWidth: 3)
+        context.stroke(zig, with: .color(Color.windowBackground), lineWidth: 3)
         context.draw(Text("ground far below").font(.system(size: 9)).foregroundStyle(.tertiary),
                      at: CGPoint(x: bar.minX, y: plot.maxY + 4), anchor: .topLeading)
 
@@ -1054,5 +1006,131 @@ struct WaveTimeChart: View {
         let row = CGRect(x: plot.minX - 2, y: plot.minY + CGFloat(selected) * Self.rowHeight,
                          width: plot.width + 4, height: Self.rowHeight)
         context.stroke(Path(roundedRect: row, cornerRadius: 3), with: .color(.accentColor), lineWidth: 2)
+    }
+}
+
+// MARK: - The playbar
+
+/// The transport for the forecast days, pinned to the bottom of the surface.
+///
+/// WHY IT FLOATS. It used to be the first card in the scroll, which meant the
+/// control that drives every chart below it scrolled off the top as soon as you
+/// went looking at those charts. You'd read the wave-over-time panel, want the
+/// next day, and have to scroll back up to ask for it. A transport belongs where
+/// a transport belongs: over the content, always reachable, out of the flow.
+///
+/// WHY THE ARROWS ARE NOT ON THE MAC. Stepping is the primary way through the
+/// days and on the Mac ← and → already do it from anywhere on the page, which is
+/// better than any button — no pointer travel, no target to hit. An iPad has no
+/// such keys unless someone has attached a keyboard, so there the same job needs
+/// something to touch. Each platform gets the affordance it can actually use,
+/// and neither carries the other's.
+struct PatternPlaybar: View {
+    @ObservedObject var model: UpperAirModel
+    @Binding var playing: Bool
+    let frame: UpperAirFrame
+
+    @FocusState private var focus: Control?
+    private enum Control { case play, slider }
+
+    var body: some View {
+        let last = model.lastFrame
+        HStack(spacing: 12) {
+            Button {
+                togglePlay()
+            } label: {
+                Image(systemName: playing ? "pause.fill" : "play.fill")
+                    .frame(width: 22, height: 18)
+            }
+            .focusable()
+            .focused($focus, equals: .play)
+            .focusEffectDisabled()
+            .onKeyPress(.space) { togglePlay(); return .handled }
+            .onKeyPress(.return) { togglePlay(); return .handled }
+            .overlay(focusRing(focus == .play))
+            .accessibilityLabel(playing ? "Pause" : "Play through the forecast days")
+
+            #if !os(macOS)
+            stepButton("chevron.left", delta: -1, enabled: model.frameIndex > 0)
+            #endif
+
+            Slider(value: Binding(get: { Double(model.frameIndex) },
+                                  set: { playing = false; model.go(to: Int($0.rounded())) }),
+                   in: 0...Double(max(last, 1)), step: 1)
+                .disabled(last < 1)
+                .focusable()
+                .focused($focus, equals: .slider)
+                .focusEffectDisabled()
+                .onKeyPress(.leftArrow) { playing = false; model.step(-1); return .handled }
+                .onKeyPress(.rightArrow) { playing = false; model.step(+1); return .handled }
+                .onKeyPress(.home) { model.go(to: 0); return .handled }
+                .onKeyPress(.end) { model.go(to: last); return .handled }
+                .padding(.horizontal, 4)
+                .overlay(focusRing(focus == .slider))
+                .accessibilityLabel("Forecast day")
+                .accessibilityValue("Valid \(PatternFormat.valid(frame.valid)), day \(model.frameIndex + 1) of \(last + 1)")
+
+            #if !os(macOS)
+            stepButton("chevron.right", delta: +1, enabled: model.frameIndex < last)
+            #endif
+
+            // The day it is showing, which is the bar's actual subject. Kept
+            // beside the count rather than only in the header, because the header
+            // is now something you may have scrolled past.
+            VStack(alignment: .trailing, spacing: 1) {
+                Text(PatternFormat.valid(frame.valid))
+                    .font(.caption.weight(.medium)).lineLimit(1)
+                Text("\(model.frameIndex + 1) / \(last + 1)")
+                    .font(.caption2).foregroundStyle(.secondary).monospacedDigit()
+            }
+            .fixedSize()
+
+            #if os(macOS)
+            Text("← → step · space plays")
+                .font(.caption).foregroundStyle(.tertiary)
+            #endif
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 10)
+        // A real surface, not a tint over the scroll. The charts underneath are
+        // dense and mostly ink; anything translucent enough to read through would
+        // have a trough running under the slider.
+        .background(.bar, in: Capsule())
+        .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        .shadow(color: .black.opacity(0.18), radius: 12, y: 4)
+        .frame(maxWidth: 820)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 16)
+        .task(id: playing) {
+            guard playing else { return }
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(700))
+                guard !Task.isCancelled, playing else { return }
+                model.go(to: model.frameIndex + 1)
+                if model.frameIndex >= model.lastFrame { playing = false; return }
+            }
+        }
+    }
+
+    @ViewBuilder private func stepButton(_ symbol: String, delta: Int, enabled: Bool) -> some View {
+        Button {
+            playing = false
+            model.step(delta)
+        } label: {
+            Image(systemName: symbol).frame(width: 22, height: 18)
+        }
+        .disabled(!enabled)
+        .accessibilityLabel(delta < 0 ? "Previous day" : "Next day")
+    }
+
+    private func togglePlay() {
+        if !playing && model.frameIndex >= model.lastFrame { model.frameIndex = 0 }
+        playing.toggle()
+    }
+
+    private func focusRing(_ on: Bool) -> some View {
+        RoundedRectangle(cornerRadius: 6)
+            .stroke(Color.accentColor, lineWidth: 2)
+            .opacity(on ? 1 : 0)
     }
 }

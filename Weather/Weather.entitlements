@@ -2,9 +2,29 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Not sandboxed, deliberately and for now: the archive this app reads and
-	     writes lives at ~/Library/Application Support/Almanac/Weather, which is
-	     Almanac's directory. Sandboxing before that split is decided would cut
-	     the app off from years of samples on its first launch. -->
+	<!-- Not sandboxed, deliberately and for now. The archive is read and written
+	     through AppGroup.dataDirectory, which prefers the group container below
+	     and falls back to ~/Library/Application Support/Almanac when the
+	     entitlement isn't in the signed profile. -->
+	<!-- ONE STORE FOR ALL THREE APPS, and it has to be spelled out. The default
+	     for this key is $(TeamIdentifierPrefix)$(CFBundleIdentifier), and the
+	     three targets have three different bundle ids — so accepting the default
+	     gives each app a private store it is the only member of, which looks
+	     exactly like working until you check a second device. Pinned to one
+	     literal, the Mac, the iPad and the Apple TV are in the same store. -->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>CG68B3UD28.jdmorlan.vane</string>
+	<!-- STILL `jdm-solutions`, DELIBERATELY, while the bundle ids moved to
+	     `jdmorlan`. This string is not a name, it is a POINTER: it is what
+	     `AppGroup.resolve` hands to containerURL(for:), and the thing on the
+	     other end holds four years of one-minute samples. Renaming it would
+	     return a fresh empty directory and put the archive behind a second
+	     migration for no user-visible gain — nobody ever sees a group id. The
+	     bundle ids had to be fixed before TestFlight makes them permanent; this
+	     one is invisible plumbing already pointing at real data. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>CG68B3UD28.group.jdm-solutions.vane</string>
+	</array>
 </dict>
 </plist>

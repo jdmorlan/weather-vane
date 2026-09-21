@@ -116,6 +116,19 @@ public enum Radar {
     /// name at any size you ask for.
     public static func tileURL(frame: RadarFrame, z: Int, x: Int, y: Int,
                                size: Int = tileSize) -> URL? {
+        tileURL(stamp: frame.stamp, z: z, x: x, y: y, size: size)
+    }
+
+    /// The same request addressed by the STAMP alone.
+    ///
+    /// `FieldTileSource` keys a tile by an opaque stamp string rather than a
+    /// typed frame, because the fields that share that substrate disagree about
+    /// what time even means — GOES has no TIME argument at all and a burn ban
+    /// changes when a county votes. Rebuilding a `RadarFrame` from a string just
+    /// to read `.stamp` back off it would be a round trip through a date
+    /// formatter for no gain.
+    public static func tileURL(stamp: String, z: Int, x: Int, y: Int,
+                               size: Int = tileSize) -> URL? {
         var components = URLComponents(string: "\(host)/cgi-bin/wms/nexrad/n0q-t.cgi")
         components?.queryItems = [
             .init(name: "SERVICE", value: "WMS"),
@@ -131,7 +144,7 @@ public enum Radar {
             // basemap underneath it — the roads that say WHERE the returns are —
             // disappears everywhere the radar has coverage, which is everywhere.
             .init(name: "TRANSPARENT", value: "TRUE"),
-            .init(name: "TIME", value: frame.stamp),
+            .init(name: "TIME", value: stamp),
         ]
         return components?.url
     }
@@ -229,14 +242,21 @@ public struct NEXRADClient: Sendable {
 /// next field and a line 60 miles west are different questions — and a continuous
 /// zoom makes you re-answer "where am I looking" every single time.
 public enum RadarRange: String, CaseIterable, Identifiable, Sendable {
-    case close, nearby, regional
+    case overhead, close, nearby, regional
 
     public var id: String { rawValue }
 
     /// Radius in metres.
     public var radius: Double {
         switch self {
-        case .close:    return 30_000     // ~19 mi — is it over the house
+        // ~7 mi. Tighter than `close`, because nineteen miles is still a county
+        // away: once a cell is nearly on you the question stops being "where is
+        // it" and becomes "is it over the house or the next road up", and that
+        // is a scale the wider views cannot resolve. The NEXRAD composite is
+        // about 1km, so this is roughly its floor — any closer and you are
+        // zooming into the pixels rather than the weather.
+        case .overhead: return 11_500
+        case .close:    return 30_000     // ~19 mi — the near neighbourhood
         case .nearby:   return 90_000     // ~56 mi — what is about to be
         case .regional: return 240_000    // ~150 mi — what the day is made of
         }
@@ -244,6 +264,7 @@ public enum RadarRange: String, CaseIterable, Identifiable, Sendable {
 
     public var label: String {
         switch self {
+        case .overhead: return "Overhead"
         case .close:    return "Close"
         case .nearby:   return "Nearby"
         case .regional: return "Regional"

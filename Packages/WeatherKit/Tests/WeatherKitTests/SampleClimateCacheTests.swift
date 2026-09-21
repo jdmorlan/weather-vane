@@ -1,7 +1,7 @@
 import XCTest
 @testable import WeatherKit
 
-final class WindClimateCacheTests: XCTestCase {
+final class SampleClimateCacheTests: XCTestCase {
 
     private final class MemoryArchive: SampleArchiveStore, @unchecked Sendable {
         var days: [String: [StationSample]] = [:]
@@ -40,15 +40,15 @@ final class WindClimateCacheTests: XCTestCase {
             store.days[key] = day(direction: Double(i * 37 % 360), speed: Double(i % 9) + 1,
                                   gust: Double(i % 13) + 4)
         }
-        let cache = WindClimateCache(url: tempURL())
+        let cache = SampleClimateCache(url: tempURL())
 
         // Warm the cache on half the record, then let the rest arrive.
         let all = try store.archivedDays()
-        var partial = WindClimateAccumulator()
+        var partial = SampleClimateAccumulator()
         for d in all.prefix(9) { partial.fold(day: d, samples: try store.samples(onDay: d)) }
         try cache.save(partial)
 
-        let incremental = cache.refresh(from: store)
+        let incremental = cache.refresh(from: store).wind
         let full = WindClimate.build(from: store)
 
         XCTAssertEqual(incremental.days, full.days)
@@ -62,13 +62,13 @@ final class WindClimateCacheTests: XCTestCase {
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
         store.days["2024-03-02"] = day(direction: 180, speed: 8)
-        let cache = WindClimateCache(url: tempURL())
+        let cache = SampleClimateCache(url: tempURL())
 
-        cache.refresh(from: store)
+        cache.refresh(from: store).wind
         store.reads.removeAll()
 
         store.days["2024-03-03"] = day(direction: 0, speed: 12)
-        let climate = cache.refresh(from: store)
+        let climate = cache.refresh(from: store).wind
 
         XCTAssertEqual(store.reads, ["2024-03-03"],
                        "the two days already folded in must not be re-read")
@@ -78,11 +78,11 @@ final class WindClimateCacheTests: XCTestCase {
     func testNothingNewIsANoOpAndReadsNoDaysAtAll() throws {
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
-        let cache = WindClimateCache(url: tempURL())
-        cache.refresh(from: store)
+        let cache = SampleClimateCache(url: tempURL())
+        cache.refresh(from: store).wind
         store.reads.removeAll()
 
-        let climate = cache.refresh(from: store)
+        let climate = cache.refresh(from: store).wind
         XCTAssertTrue(store.reads.isEmpty)
         XCTAssertEqual(climate.days, 1)
     }
@@ -93,12 +93,12 @@ final class WindClimateCacheTests: XCTestCase {
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
         store.days["2024-03-03"] = day(direction: 180, speed: 8)
-        let cache = WindClimateCache(url: tempURL())
-        let before = cache.refresh(from: store)
+        let cache = SampleClimateCache(url: tempURL())
+        let before = cache.refresh(from: store).wind
         XCTAssertEqual(before.days, 2)
 
         store.days["2024-03-02"] = day(direction: 0, speed: 20)
-        let after = cache.refresh(from: store)
+        let after = cache.refresh(from: store).wind
         XCTAssertEqual(after.days, 3)
         XCTAssertEqual(after.overall, WindClimate.build(from: store).overall)
     }
@@ -106,10 +106,10 @@ final class WindClimateCacheTests: XCTestCase {
     func testADayIsNeverFoldedTwice() throws {
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
-        let cache = WindClimateCache(url: tempURL())
-        let once = cache.refresh(from: store)
-        let again = cache.refresh(from: store)
-        let third = cache.refresh(from: store)
+        let cache = SampleClimateCache(url: tempURL())
+        let once = cache.refresh(from: store).wind
+        let again = cache.refresh(from: store).wind
+        let third = cache.refresh(from: store).wind
         XCTAssertEqual(once.overall.movingMinutes, again.overall.movingMinutes)
         XCTAssertEqual(again.overall.movingMinutes, third.overall.movingMinutes)
     }
@@ -121,30 +121,30 @@ final class WindClimateCacheTests: XCTestCase {
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
 
-        var old = WindClimateAccumulator()
+        var old = SampleClimateAccumulator()
         old.fold(day: "2024-03-01", samples: try store.samples(onDay: "2024-03-01"))
-        old.version = WindClimateAccumulator.currentVersion - 1
-        try WindClimateCache(url: url).save(old)
+        old.version = SampleClimateAccumulator.currentVersion - 1
+        try SampleClimateCache(url: url).save(old)
 
-        XCTAssertNil(WindClimateCache(url: url).load(), "a stale version must not load")
+        XCTAssertNil(SampleClimateCache(url: url).load(), "a stale version must not load")
         store.reads.removeAll()
-        let rebuilt = WindClimateCache(url: url).refresh(from: store)
+        let rebuilt = SampleClimateCache(url: url).refresh(from: store).wind
         XCTAssertEqual(store.reads, ["2024-03-01"], "it rebuilds from the samples")
         XCTAssertEqual(rebuilt.days, 1)
     }
 
     func testAMissingOrCorruptCacheRebuildsRatherThanThrowing() throws {
         let url = tempURL()
-        XCTAssertNil(WindClimateCache(url: url).load())
+        XCTAssertNil(SampleClimateCache(url: url).load())
 
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
                                                 withIntermediateDirectories: true)
         try Data("not json".utf8).write(to: url)
-        XCTAssertNil(WindClimateCache(url: url).load())
+        XCTAssertNil(SampleClimateCache(url: url).load())
 
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
-        XCTAssertEqual(WindClimateCache(url: url).refresh(from: store).days, 1)
+        XCTAssertEqual(SampleClimateCache(url: url).refresh(from: store).wind.days, 1)
     }
 
     func testTheCacheRoundTripsThroughDiskUnchanged() throws {
@@ -154,9 +154,9 @@ final class WindClimateCacheTests: XCTestCase {
             store.days[key] = day(direction: Double(i) * 30, speed: Double(i), gust: Double(i) * 3)
         }
         let url = tempURL()
-        let first = WindClimateCache(url: url).refresh(from: store)
+        let first = SampleClimateCache(url: url).refresh(from: store).wind
         // A second cache object, reading only what the first left on disk.
-        let reloaded = WindClimateCache(url: url).refresh(from: store)
+        let reloaded = SampleClimateCache(url: url).refresh(from: store).wind
         XCTAssertEqual(first.overall, reloaded.overall)
         XCTAssertEqual(first.byMonth, reloaded.byMonth)
     }
@@ -165,7 +165,7 @@ final class WindClimateCacheTests: XCTestCase {
         let store = MemoryArchive()
         store.days["2024-03-01"] = day(direction: 180, speed: 8)
         let url = tempURL()
-        WindClimateCache(url: url).refresh(from: store)
+        _ = SampleClimateCache(url: url).refresh(from: store)
         let text = try String(contentsOf: url, encoding: .utf8)
         XCTAssertTrue(text.contains("\"03\""), "a person should be able to read the month keys")
     }
@@ -174,7 +174,7 @@ final class WindClimateCacheTests: XCTestCase {
         let store = MemoryArchive()
         for i in 1...5 { store.days[String(format: "2024-03-%02d", i)] = day(direction: 180, speed: 8) }
         var seen: [Int] = []
-        WindClimateCache(url: tempURL()).refresh(from: store) { done, total in
+        _ = SampleClimateCache(url: tempURL()).refresh(from: store) { done, total in
             XCTAssertEqual(total, 5)
             seen.append(done)
         }

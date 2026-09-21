@@ -3,11 +3,19 @@
 //
 //  Comparing the SAME STRETCH OF CLOCK across several recent days.
 //
-//  The archive can't answer this and never will: it stores a day as its min, max
-//  and means, and "the morning felt better than the afternoon" is a question about
+//  The DAILY archive can't answer this: it stores a day as its min, max and
+//  means, and "the morning felt better than the afternoon" is a question about
 //  the shape INSIDE a day. A daily high can't distinguish a morning that stayed at
 //  70° until ten from one that was through 80° by eight. Same wall chill hours hit
 //  — some questions only exist while the individual samples are in hand.
+//
+//  This used to read "and never will", which stopped being true when
+//  `SampleArchive` landed: every minute of every archived day is now on disk, and
+//  `DiurnalClimate` answers the climatological version of this question — what a
+//  day's shape usually is, month by month — off exactly that store. The two are
+//  not redundant. This file is about a HANDFUL OF NAMED DAYS compared against
+//  each other and is fed live from the API, which is why it still has a
+//  thirty-day reach; that one is about every day there has ever been, folded.
 //
 //  So this reads raw observations rather than DailyRecords. That's affordable
 //  because of an accident of the API: `bucket=30` caps a request at 30 days, so
@@ -83,7 +91,7 @@ public struct DayWindow: Identifiable, Equatable, Sendable {
 }
 
 /// A stretch of the clock, in local hours.
-public struct ClockWindow: Equatable, Sendable {
+public struct ClockWindow: Equatable, Hashable, Sendable {
     /// Inclusive start hour, 0–23.
     public var startHour: Int
     /// Exclusive end hour, 1–24.
@@ -97,6 +105,39 @@ public struct ClockWindow: Equatable, Sendable {
     /// 6am until 10am: after sunrise, before the afternoon has taken over.
     public static let morning = ClockWindow(startHour: 6, endHour: 10)
     public static let afternoon = ClockWindow(startHour: 13, endHour: 17)
+    /// 5pm until 9pm: the cool-down, which is a different question from the
+    /// afternoon's peak and the one you ask before deciding to eat outside.
+    public static let evening = ClockWindow(startHour: 17, endHour: 21)
+
+    /// The presets, in clock order — what a picker offers before anyone reaches
+    /// for custom hours.
+    public static let presets: [ClockWindow] = [.morning, .afternoon, .evening]
+
+    /// What to call this stretch in a sentence.
+    ///
+    /// Derived from the start hour rather than matched against the presets, so a
+    /// custom window still has a noun. A view that had to say "window" because
+    /// the user dragged the hours off a preset would be admitting the control
+    /// and the prose were built by different people.
+    public var name: String {
+        switch startHour {
+        case ..<12: return "morning"
+        case ..<17: return "afternoon"
+        case ..<21: return "evening"
+        default:    return "night"
+        }
+    }
+
+    /// "6am–10am", for a control that has to show which hours it means.
+    public var label: String {
+        Self.hour(startHour) + "–" + Self.hour(endHour)
+    }
+
+    private static func hour(_ h: Int) -> String {
+        let wrapped = h % 24
+        let display = wrapped % 12 == 0 ? 12 : wrapped % 12
+        return "\(display)\(wrapped < 12 || wrapped == 24 ? "am" : "pm")"
+    }
 
     public func contains(minuteOfDay: Int) -> Bool {
         minuteOfDay >= startHour * 60 && minuteOfDay < endHour * 60

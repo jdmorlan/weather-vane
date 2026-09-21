@@ -157,6 +157,39 @@ public struct SeasonTrack: Equatable, Sendable, Identifiable {
     /// Days until this track's next crossing — how tracks are ordered.
     public var nextInDays: Int { milestones.first?.daysFromNow ?? .max }
 
+    /// Which way through the year this track was built for. The milestones
+    /// can't carry it — a crossing of 70° looks identical in April and
+    /// September — and the lead sentence is unreadable without it.
+    public var cooling: Bool = true
+
+    /// The subject and verb the lead sentence is built from.
+    ///
+    /// Not derivable from `name`, which is why the sentence was wrong for half
+    /// the rows: "Humidity drop below 65°" and "Freeze drop 32°" are both
+    /// broken English, and this is the first line on the page. Two rows take a
+    /// plural verb, two take a singular one, and the freeze rows want the
+    /// threshold inside the SUBJECT ("the first 32° night arrives") rather than
+    /// hung off the verb.
+    ///
+    /// One verb form serves both sentence shapes — "nights usually settle
+    /// below 70°" and "before nights settle below 70°" — because both agree
+    /// with the same subject.
+    public func phrase(_ milestone: SeasonMilestone) -> (subject: String, verb: String, plural: Bool) {
+        let degrees = "\(Int(milestone.threshold))°"
+        switch measure {
+        case .afternoons:
+            return ("Afternoons", cooling ? "ease below \(degrees)" : "reach \(degrees)", true)
+        case .nights:
+            return ("Nights", cooling ? "settle below \(degrees)" : "stay above \(degrees)", true)
+        case .humidity:
+            return ("The air", cooling ? "dries below \(degrees) dew point"
+                                       : "thickens past \(degrees) dew point", false)
+        case .freeze:
+            return (cooling ? "The first \(degrees) night" : "The last \(degrees) night",
+                    cooling ? "arrives" : "passes", false)
+        }
+    }
+
     /// The daily reading each measure is judged on. Kept beside the measure
     /// rather than at the call sites so the strip and the crossings can't end up
     /// drawn from two different numbers.
@@ -223,7 +256,7 @@ extension Climatology {
             track(name: "Nights", measure: .nights, symbol: "moon.stars.fill",
                   thresholds: cooling ? [75, 70, 65] : [65, 70, 75],
                   cooling: cooling, asOf: day, window: window),
-            track(name: "Humidity", measure: .humidity, symbol: "humidity.fill",
+            track(name: "Mugginess", measure: .humidity, symbol: "humidity.fill",
                   thresholds: cooling ? [70, 65, 60] : [60, 65, 70],
                   cooling: cooling, asOf: day, window: window),
             freezeTrack(asOf: day, cooling: cooling),
@@ -387,7 +420,8 @@ extension Climatology {
         for milestone in milestones where milestone.monthDay >= (monotonic.last?.monthDay ?? "") {
             monotonic.append(milestone)
         }
-        return SeasonTrack(name: name, measure: measure, symbol: symbol, milestones: monotonic)
+        return SeasonTrack(name: name, measure: measure, symbol: symbol,
+                           milestones: monotonic, cooling: cooling)
     }
 
     private func freezeTrack(asOf day: String, cooling: Bool) -> SeasonTrack {
@@ -412,7 +446,7 @@ extension Climatology {
                                    normalDaysFromNow: signed)
         }
         return SeasonTrack(name: cooling ? "Freeze" : "Last freeze", measure: .freeze,
-                           symbol: "snowflake", milestones: milestones)
+                           symbol: "snowflake", milestones: milestones, cooling: cooling)
     }
 
     /// Has this autumn already reached a frost level? `nil` when the stretch

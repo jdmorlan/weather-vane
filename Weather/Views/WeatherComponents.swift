@@ -213,3 +213,25 @@ struct DaylightArc: View {
         return CGPoint(x: cx + r * CGFloat(cos(theta)), y: cy + r * CGFloat(sin(theta)))
     }
 }
+
+// MARK: - Empty states inside the card scroll
+
+extension View {
+    /// Give a `ContentUnavailableView` room to centre itself in.
+    ///
+    /// WHY IT NEEDS SAYING. `ContentUnavailableView` centres its content within
+    /// ITS OWN bounds, and the card scroll is a `LazyVStack(alignment: .leading)`
+    /// — which hands every child its intrinsic size. So an empty state took the
+    /// width of its own longest line and the height of its own three elements,
+    /// and rendered exactly as it was asked to: shoved against the left edge,
+    /// pinned to the top, with the rest of the column empty beneath it. It read
+    /// as a layout bug because it looked like one; the view was centring
+    /// perfectly inside a box the size of its own text.
+    ///
+    /// `maxWidth: .infinity` gives it the column to centre across. `minHeight`
+    /// rather than `maxHeight: .infinity` because inside a `ScrollView` the
+    /// latter resolves to the ideal height and changes nothing.
+    func emptyStatePanel(minHeight: CGFloat = 320) -> some View {
+        frame(maxWidth: .infinity, minHeight: minHeight)
+    }
+}

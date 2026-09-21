@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- THE SAME LITERAL AS THE MAC AND THE TV, and that is the entire point:
+	     this key names the store, and a store with one member syncs nothing.
+	     See Weather.entitlements for why the default value cannot be used. -->
+	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
+	<string>CG68B3UD28.jdmorlan.vane</string>
+</dict>
+</plist>
