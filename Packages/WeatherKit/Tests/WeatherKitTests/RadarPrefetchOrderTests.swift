@@ -17,7 +17,7 @@ final class RadarPrefetchOrderTests: XCTestCase {
         let model = RadarModel()
         let base = Date(timeIntervalSince1970: 1_800_000_000)
         model.setFramesForTesting((0..<count).map {
-            RadarFrame(time: base.addingTimeInterval(Double($0) * Radar.scanInterval))
+            RadarFrame(time: base.addingTimeInterval(Double($0) * 300), key: "KFWS-\($0)")
         })
         return model
     }

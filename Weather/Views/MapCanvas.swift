@@ -56,6 +56,8 @@ enum MapLayerContent {
     /// rather than one per frame or one that blends both itself.
     case field(FieldLayer)
     case outlines([MapOutline])
+    /// One radar's reach and beam-height rings. See `RadarCoverage`.
+    case coverage(RadarCoverage)
 }
 
 /// A raster field and where its loop currently is.
@@ -112,6 +114,7 @@ struct MapLayer: Identifiable {
 
     var pins: [MapPin] { if case .pins(let p) = content { return p }; return [] }
     var outlines: [MapOutline] { if case .outlines(let o) = content { return o }; return [] }
+    var coverage: RadarCoverage? { if case .coverage(let c) = content { return c }; return nil }
     var field: FieldLayer? {
         if case .field(let field) = content { return field }
         return nil
@@ -247,6 +250,25 @@ struct MapCanvas: MapViewRepresentable {
             c.installedOutlines = outlines.map(\.id)
         }
 
+        // --- Radar coverage rings ---------------------------------------------
+        let coverage = visible.compactMap(\.coverage).first
+        if c.installedCoverage != coverage {
+            for overlay in map.overlays where overlay is CoverageRing { map.removeOverlay(overlay) }
+            map.removeAnnotations(map.annotations.compactMap { $0 as? CoverageLabel })
+            if let coverage {
+                let center = CLLocationCoordinate2D(latitude: coverage.latitude, longitude: coverage.longitude)
+                for ring in coverage.rings {
+                    let circle = CoverageRing(center: center, radius: ring.radius)
+                    circle.kind = ring.kind
+                    map.addOverlay(circle, level: .aboveLabels)
+                    map.addAnnotation(CoverageLabel(text: ring.label, coordinate:
+                        CoverageLabel.north(of: center, by: ring.radius)))
+                }
+                map.addAnnotation(CoverageLabel(text: coverage.site, coordinate: center, isSite: true))
+            }
+            c.installedCoverage = coverage
+        }
+
         // --- Fields (radar, satellite, fire) ----------------------------------
         //
         // TWO OVERLAYS PER LAYER, AND NEITHER IS EVER REBUILT TO ANIMATE.
@@ -302,6 +324,7 @@ struct MapCanvas: MapViewRepresentable {
         var installedPins: [String] = []
         var installedAreas: [String] = []
         var installedOutlines: [String] = []
+        var installedCoverage: RadarCoverage?
         /// `layerID|sourceID` per installed field, in draw order. The source id is
         /// in the key because changing a ramp changes the pixels, and the overlay
         /// has to be rebuilt for that even though the layer is "the same" layer.
@@ -328,6 +351,14 @@ struct MapCanvas: MapViewRepresentable {
         private var displayLink: CADisplayLink?
         private var lastTick: CFTimeInterval?
 
+        /// For the sweep trail, which the display tick adds and removes itself.
+        private weak var mapView: MKMapView?
+        /// The wedge each field layer is revealing, so the next tick knows which
+        /// sector changed and the end of a reveal can be noticed.
+        private var activeReveal: [String: FieldRenderer.Reveal] = [:]
+        private var trail: SweepTrailOverlay?
+        private var trailRenderer: SweepTrailRenderer?
+
         init(onSelect: @escaping (String) -> Void) { self.onSelect = onSelect }
 
         // MARK: The clock
@@ -338,6 +369,7 @@ struct MapCanvas: MapViewRepresentable {
         /// the display and lands two steps on one frame and none on the next,
         /// which reads as precisely the judder this replaces.
         func startDisplayLink(on view: MKMapView) {
+            mapView = view
             guard displayLink == nil else { return }
             // AppKit hands out a link bound to the view's own display, which is
             // what keeps a dissolve smooth when the window is dragged to a second
@@ -384,20 +416,23 @@ struct MapCanvas: MapViewRepresentable {
             guard let slots = fieldRenderers[layerID],
                   let out = slots[0], let incoming = slots[1] else { return }
 
+            updateTrail(head)
+            if let site = head.sweep {
+                applySweep(site, head: head, out: out, incoming: incoming, layerID: layerID)
+                return
+            }
+            if activeReveal[layerID] != nil {
+                endReveal(out: out, incoming: incoming, layerID: layerID)
+            }
+
             // A still — a layer with no loop, or a paused one — names the same
             // scan twice. Drawing it into both slots would composite a picture
             // over itself, which at any alpha but 1 reads as a faint double
             // exposure.
-            // SAME STAMP IS NOT ENOUGH ANY MORE. Every forecast step draws the same
-            // scan, so two consecutive future frames have identical stamps and
-            // differ only in where they are drawn — treating that as a still would
-            // freeze the whole future half of the loop.
-            let isStill = head.stampB.isEmpty
-                || (head.stampB == head.stampA && head.offsetB == head.offsetA)
+            let isStill = head.stampB.isEmpty || head.stampB == head.stampA
 
-            if out.set(stamp: head.stampA, offset: head.offsetA) { out.setNeedsDisplay() }
-            if incoming.set(stamp: isStill ? "" : head.stampB,
-                            offset: head.offsetB) { incoming.setNeedsDisplay() }
+            if out.set(stamp: head.stampA) { out.setNeedsDisplay() }
+            if incoming.set(stamp: isStill ? "" : head.stampB) { incoming.setNeedsDisplay() }
 
             // THE INCOMING FRAME IS NEVER QUITE AT ZERO WHILE IT HAS A STAMP, and
             // that 1% is load-bearing. MapKit does not rasterise an overlay it is
@@ -435,7 +470,73 @@ struct MapCanvas: MapViewRepresentable {
             reportedTiles.removeAll()
         }
 
+        // MARK: Sweep mode
+
+        /// SWEEP MODE'S TWO SLOTS. Between reveals, the scan on screen alone. While
+        /// one is coming in, both fully on and each clipped to its side of the line:
+        /// the new scan inside the swept wedge, the old one outside it.
+        private func applySweep(_ site: SweepSite, head: FieldRenderer.Playhead,
+                                out: FieldRenderer, incoming: FieldRenderer, layerID: String) {
+            let alpha = CGFloat(head.opacity)
+            if out.alpha != alpha { out.alpha = alpha }
+
+            guard let reveal = head.reveal else {
+                if activeReveal[layerID] != nil { endReveal(out: out, incoming: incoming, layerID: layerID) }
+                if out.set(stamp: head.stampA) { out.setNeedsDisplay() }
+                if incoming.set(stamp: "") { incoming.setNeedsDisplay() }
+                if incoming.alpha != 0 { incoming.alpha = 0 }
+                return
+            }
+
+            let previous = activeReveal[layerID]
+            let wedge = SweepGeometry.wedge(site, from: reveal.from, span: reveal.turned)
+            out.set(clip: .outside(wedge))
+            incoming.set(clip: .inside(wedge))
+            let outMoved = out.set(stamp: head.stampA)
+            let inMoved = incoming.set(stamp: head.stampB)
+            if previous == nil || outMoved || inMoved || previous?.from != reveal.from {
+                out.setNeedsDisplay(); incoming.setNeedsDisplay()
+            } else if let previous {
+                let dirty = SweepGeometry.sectorRect(site, from: reveal.from + previous.turned,
+                                                     span: reveal.turned - previous.turned + 1)
+                out.setNeedsDisplay(dirty); incoming.setNeedsDisplay(dirty)
+            }
+            if incoming.alpha != alpha { incoming.alpha = alpha }
+            activeReveal[layerID] = reveal
+        }
+
+        private func endReveal(out: FieldRenderer, incoming: FieldRenderer, layerID: String) {
+            activeReveal[layerID] = nil
+            out.set(clip: nil); incoming.set(clip: nil)
+            out.setNeedsDisplay(); incoming.setNeedsDisplay()
+        }
+
+        /// The line and its glow: on while a layer is in sweep mode, off otherwise.
+        private func updateTrail(_ head: FieldRenderer.Playhead) {
+            guard let site = head.sweep else {
+                if let trail { mapView?.removeOverlay(trail) }
+                trail = nil; trailRenderer = nil
+                return
+            }
+            if let trail, trail.site == site {
+                // MapKit may not have asked for the renderer yet on the first
+                // tick or two; the next update catches up.
+                trailRenderer?.update(azimuth: head.beamAzimuth)
+            } else if let mapView {
+                if let trail { mapView.removeOverlay(trail) }
+                let new = SweepTrailOverlay(site)
+                trail = new
+                trailRenderer = nil
+                mapView.addOverlay(new, level: .aboveLabels)
+            }
+        }
+
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let trail = overlay as? SweepTrailOverlay {
+                let renderer = SweepTrailRenderer(trail: trail)
+                if trail === self.trail { trailRenderer = renderer }
+                return renderer
+            }
             if let field = overlay as? FieldOverlay {
                 if let existing = fieldRenderers[field.layerID]?[field.slot] { return existing }
                 let renderer = FieldRenderer(overlay: field)
@@ -472,6 +573,25 @@ struct MapCanvas: MapViewRepresentable {
                 renderer.fillColor = tint.withAlphaComponent(0.08)
                 return renderer
             }
+            if let ring = overlay as? CoverageRing {
+                // Quiet on purpose: these are the scope's graticule, not
+                // weather, and they must never be mistaken for a boundary
+                // someone issued. The edge is solid because it is a hard fact
+                // about the data; the height rings are dashed because they are
+                // a reading aid.
+                let renderer = MKCircleRenderer(circle: ring)
+                let ink = PlatformColor(Color.primary)
+                switch ring.kind {
+                case .reach:
+                    renderer.strokeColor = ink.withAlphaComponent(0.55)
+                    renderer.lineWidth = 1.5
+                case .beamHeight:
+                    renderer.strokeColor = ink.withAlphaComponent(0.35)
+                    renderer.lineWidth = 1
+                    renderer.lineDashPattern = [5, 5]
+                }
+                return renderer
+            }
             if let circle = overlay as? AreaCircle {
                 let renderer = MKCircleRenderer(circle: circle)
                 let tint = PlatformColor(circle.tint)
@@ -484,6 +604,12 @@ struct MapCanvas: MapViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if let label = annotation as? CoverageLabel {
+                let view = mapView.dequeueReusableAnnotationView(withIdentifier: CoverageLabelView.reuseID)
+                    ?? CoverageLabelView(annotation: label, reuseIdentifier: CoverageLabelView.reuseID)
+                view.annotation = label
+                return view
+            }
             guard annotation is PinAnnotation else { return nil }
             return mapView.dequeueReusableAnnotationView(withIdentifier: MapPinView.reuseID,
                                                          for: annotation)
@@ -514,6 +640,63 @@ final class PinAnnotation: NSObject, MKAnnotation {
 
 final class AreaCircle: MKCircle {
     var tint: Color = .accentColor
+}
+
+final class CoverageRing: MKCircle {
+    var kind: RadarCoverage.Ring.Kind = .reach
+}
+
+/// A ring's caption, sat on the ring at due north, or the site's name at its
+/// centre.
+final class CoverageLabel: NSObject, MKAnnotation {
+    let text: String
+    let isSite: Bool
+    let coordinate: CLLocationCoordinate2D
+
+    init(text: String, coordinate: CLLocationCoordinate2D, isSite: Bool = false) {
+        self.text = text; self.coordinate = coordinate; self.isSite = isSite
+    }
+
+    /// Due north is a meridian, so this is exact without any great-circle work.
+    static func north(of center: CLLocationCoordinate2D, by meters: Double) -> CLLocationCoordinate2D {
+        CLLocationCoordinate2D(latitude: center.latitude + meters / 111_195, longitude: center.longitude)
+    }
+}
+
+/// The label drawn as an image through SwiftUI, which is the one text path that
+/// is the same on AppKit, UIKit and tvOS.
+private final class CoverageLabelView: MKAnnotationView {
+    static let reuseID = "coverage-label"
+
+    override var annotation: MKAnnotation? {
+        didSet {
+            guard let label = annotation as? CoverageLabel else { return }
+            let content = HStack(spacing: 4) {
+                if label.isSite {
+                    Image(systemName: "dot.radiowaves.left.and.right")
+                }
+                Text(label.text)
+            }
+            .font(.system(size: label.isSite ? 11 : 10, weight: label.isSite ? .semibold : .regular))
+            // A fixed dark capsule rather than a material: `ImageRenderer`
+            // cannot draw materials, and white on near-black reads on both the
+            // light and dark map without knowing which one is showing.
+            .foregroundStyle(.white)
+            .padding(.horizontal, 6).padding(.vertical, 2)
+            .background(Color.black.opacity(0.62), in: Capsule())
+            let renderer = ImageRenderer(content: content)
+            #if os(macOS)
+            renderer.scale = NSScreen.main?.backingScaleFactor ?? 2
+            image = renderer.nsImage
+            #else
+            renderer.scale = UITraitCollection.current.displayScale
+            image = renderer.uiImage
+            #endif
+            displayPriority = label.isSite ? .required : .defaultHigh
+            canShowCallout = false
+            collisionMode = .rectangle
+        }
+    }
 }
 
 private final class MapPinView: MKMarkerAnnotationView {

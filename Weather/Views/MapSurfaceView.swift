@@ -79,7 +79,7 @@ struct MapSurfaceView: View {
 
     @State private var surface: MapSurface = .radar
     /// Additive, and only ever these two. See `MapLayerRole.context`.
-    @State private var context: Set<String> = ["warnings", "home"]
+    @State private var context: Set<String> = ["warnings", "home", "coverage"]
     @State private var band: SatelliteFieldSource.Band = .infrared
     @State private var fireProduct: TexasFireFieldSource.Product = .burnBan
     @State private var focus: MapFocus?
@@ -107,10 +107,12 @@ struct MapSurfaceView: View {
     /// should say nothing at all — a status line that flashes on every pan is
     /// worse than no status line.
     @State private var incompleteSince: Date?
+    @State private var lastStuckReport: Date?
 
     /// The source and stamps for whatever is on screen, so progress is counted
     /// against the view you are actually looking at.
-    private var currentSource: FieldTileSource {
+    /// Nil only for radar with no site chosen, where there is nothing to count.
+    private var currentSource: FieldTileSource? {
         switch surface {
         case .radar: return radarSource
         case .cloud: return satelliteSource
@@ -139,7 +141,23 @@ struct MapSurfaceView: View {
         }
     }
 
-    private var radarSource: RadarFieldSource { RadarFieldSource(curve: .standard) }
+    /// The chosen site's Level II. The model owns the choice so the frames and the
+    /// tiles can never disagree about which radar they came from.
+    private var radarSource: FieldTileSource? { radar.fieldSource }
+
+    /// WHICH RADAR, as stored: "auto" for the site nearest home, or an ICAO. Per
+    /// device rather than synced — the right radar for a laptop on a trip is not
+    /// the one at home.
+    @AppStorage("radarSite") private var radarSiteChoice: String = "auto"
+    @AppStorage("radarMode") private var radarModeChoice: RadarModel.Mode = .loop
+
+    /// Anything that is not a known site — "auto", or a value saved by an older
+    /// build — means the site nearest home.
+    private var resolvedSite: RadarSite? {
+        if let chosen = RadarSites.site(radarSiteChoice) { return chosen }
+        guard let home = settings.homeCoordinate else { return nil }
+        return RadarSites.nearest(latitude: home.latitude, longitude: home.longitude).first
+    }
     private var satelliteSource: SatelliteFieldSource { SatelliteFieldSource(band: band) }
     private var fireSource: TexasFireFieldSource { TexasFireFieldSource(product: fireProduct) }
 
@@ -157,7 +175,10 @@ struct MapSurfaceView: View {
                 timeline
             }
             .padding(.bottom, 16)
-            .animation(.easeOut(duration: 0.18), value: fieldStatus)
+            // On whether there IS a status, not on its content. Animating the
+            // whole value crossfaded every text change in place — the old line
+            // and the new one drawn over each other four times a second.
+            .animation(.easeOut(duration: 0.18), value: fieldStatus == nil)
         }
         // NOT `driving:` — the clock is ticked from the canvas's display link, so
         // the dissolve lands on real display refreshes. Two drivers would advance
@@ -166,15 +187,23 @@ struct MapSurfaceView: View {
         .task { await hazards.poll(settings: settings) }
         .task { await refreshStamps() }
         .task { await watchProgress() }
-        .task { await watchMotion() }
-        // A motion estimate is what CREATES the forecast frames, so the ground they
-        // will need has to be asked for the moment one lands — the prefetch is
-        // otherwise only driven by the map reporting a new viewport, which a
-        // stationary map never does.
-        .onChange(of: radar.motion) { _, _ in
+        // NEW SCANS NEED FETCHING TOO, and nothing else asks for them. The list
+        // reloads every couple of minutes and rotates a fresh stamp in, but the
+        // only other prefetch trigger is a GROWING viewport — a map left sitting
+        // still never produces one. So each reload added a frame
+        // nobody fetched, and after a day of that the whole loop was scans the
+        // prefetch had never heard of: "0 of 10 frames sharp", held forever. The
+        // same gap swallowed the very first load whenever the viewport reported
+        // before the index arrived.
+        .onChange(of: radar.stamps) { _, _ in
             prefetch(layerID: currentLayerID, tiles: visibleTiles)
         }
+        .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
+        .onChange(of: settings.homeLat) { _, _ in radar.site = resolvedSite }
+        .onChange(of: radarModeChoice) { _, new in radar.mode = new }
         .onAppear {
+            radar.mode = radarModeChoice
+            radar.site = resolvedSite
             FieldTileStore.shared.onRefused = { [weak radar] in
                 Task { @MainActor in radar?.noteTilesRefused() }
             }
@@ -201,6 +230,13 @@ struct MapSurfaceView: View {
     private func tick(delta: Double) -> [String: FieldRenderer.Playhead] {
         switch surface {
         case .radar:
+            // SWEEP MODE RUNS ON ITS OWN CLOCK. The line turns whether or not the
+            // loop's tiles are all in — it only ever draws the newest scans, which
+            // the prefetch fetches first.
+            if radar.mode == .sweep, let head = sweepPlayhead() {
+                radar.tick(delta: delta)
+                return ["radar": sweepPlayhead() ?? head]
+            }
             // A HALF-LOADED LOOP DOES NOT PLAY. Walking onto a frame whose tiles
             // have not arrived draws it from its parent — softer, and honest, but
             // a loop that flickers between sharp and soft reads as broken. Worse,
@@ -227,14 +263,29 @@ struct MapSurfaceView: View {
         }
     }
 
-    /// A pair of loop frames as the renderer wants them: which scan, and where to
-    /// draw it. The offset is what makes an extrapolated frame cost nothing.
-    private func playhead(_ a: LoopFrame?, _ b: LoopFrame?, blend: Double) -> FieldRenderer.Playhead {
+    /// Sweep mode's picture: the scan on screen, the one being swept in over it,
+    /// and where the line is. Nil until the site's coverage is known — the line
+    /// is drawn from the scan's own position and reach, never assumed.
+    private func sweepPlayhead() -> FieldRenderer.Playhead? {
+        let clock = radar.sweepClock
+        let shown = clock.shown ?? radar.frames.last?.stamp ?? ""
+        // PARKED: the scan on screen as a still, and no line. See `SweepClock`.
+        guard let revealing = clock.revealing, let azimuth = clock.azimuth,
+              let coverage = radar.coverage else {
+            return FieldRenderer.Playhead(stampA: shown, stampB: shown)
+        }
+        var head = FieldRenderer.Playhead(stampA: shown, stampB: revealing.scan.stamp)
+        head.sweep = SweepSite(latitude: coverage.latitude, longitude: coverage.longitude,
+                               reach: coverage.reach)
+        head.beamAzimuth = azimuth
+        head.reveal = .init(from: revealing.scan.startAzimuth, turned: revealing.turned)
+        return head
+    }
+
+    /// A pair of loop frames as the renderer wants them.
+    private func playhead(_ a: RadarFrame?, _ b: RadarFrame?, blend: Double) -> FieldRenderer.Playhead {
         guard let a else { return .init() }
-        let b = b ?? a
-        return .init(stampA: a.stamp, stampB: b.stamp, blend: blend,
-                     offsetA: CGPoint(x: a.offsetX, y: a.offsetY),
-                     offsetB: CGPoint(x: b.offsetX, y: b.offsetY))
+        return .init(stampA: a.stamp, stampB: (b ?? a).stamp, blend: blend)
     }
 
     /// THE PREFETCH, AND WHY IT IS DRIVEN FROM HERE. The renderer says which tiles
@@ -249,6 +300,7 @@ struct MapSurfaceView: View {
         // prefetch the timeline's own oldest-first order put the frame on screen
         // last in a queue of two hundred.
         case "radar":
+            guard let radarSource else { break }
             // COARSE FIRST, AND IT IS THE DIFFERENCE BETWEEN A SECOND AND TEN.
             // A ten-frame loop over this viewport is around two hundred requests
             // and `URLSession` runs ten at a time, so the last frame lands eight
@@ -262,92 +314,10 @@ struct MapSurfaceView: View {
             store.prefetch(stamps: radar.stampsByUrgency,
                            tiles: overview(of: tiles), from: radarSource)
             store.prefetch(stamps: radar.stampsByUrgency, tiles: tiles, from: radarSource)
-            // Upwind ground, for the NEWEST scan alone — that is the only one any
-            // forecast frame draws, so fetching the margin for all ten would be
-            // nine loops' worth of tiles nothing will ever ask for.
-            if let newest = radar.frames.last?.stamp {
-                store.prefetch(stamps: [newest], tiles: upwindTiles(), from: radarSource)
-            }
         case "cloud": store.prefetch(stamps: [satelliteStamp], tiles: tiles, from: satelliteSource)
         case "fire":  store.prefetch(stamps: [fireStamp], tiles: tiles, from: fireSource)
         default:      break
         }
-    }
-
-    // MARK: Working out where it is going
-
-    /// THE NOWCAST'S ONLY INPUT, measured off the pixels already on screen.
-    ///
-    /// Run on a timer rather than on every reload, and OFF THE MAIN ACTOR, because
-    /// it rasterises two scans into grids and correlates them — tens of
-    /// milliseconds, which is several dropped frames if it lands in the middle of
-    /// a dissolve.
-    ///
-    /// Every ten seconds rather than every five minutes: the scans only change on
-    /// the composite cadence, but the VIEWPORT changes whenever you pan, and a
-    /// motion measured over Abilene is not the motion over Waco.
-    private func watchMotion() async {
-        while !Task.isCancelled {
-            try? await Task.sleep(for: .seconds(10))
-            guard surface == .radar else { continue }
-            let recent = radar.frames.suffix(2)
-            guard recent.count == 2, let patch = visiblePatch() else { continue }
-            let source = radarSource
-            let gap = recent.last!.time.timeIntervalSince(recent.first!.time)
-            let stamps = recent.map(\.stamp)
-
-            let motion = await Task.detached(priority: .utility) { () -> StormMotion? in
-                let store = FieldTileStore.shared
-                guard let a = store.intensityGrid(source: source, stamp: stamps[0],
-                                                  rectX: patch.x, rectY: patch.y,
-                                                  width: patch.width, height: patch.height,
-                                                  z: patch.z, cells: 256),
-                      let b = store.intensityGrid(source: source, stamp: stamps[1],
-                                                  rectX: patch.x, rectY: patch.y,
-                                                  width: patch.width, height: patch.height,
-                                                  z: patch.z, cells: 256)
-                else { return nil }
-                var found = MotionEstimator.estimate(from: a, to: b, over: gap, maxShift: 24)
-                // Cells per second becomes MAP POINTS per second here, which is
-                // the one conversion only the map can do.
-                found.dx *= a.cellSize
-                found.dy *= a.cellSize
-                return found
-            }.value
-
-            radar.setMotion(motion)
-        }
-    }
-
-    /// The patch of map space the held tiles cover, which is what there is to
-    /// correlate. Derived from the tiles rather than from the map view because
-    /// those are exactly the pixels `FieldTileStore` can answer for.
-    private func visiblePatch() -> (x: Double, y: Double, width: Double, height: Double, z: Int)? {
-        guard let z = visibleTiles.first?.z, !visibleTiles.isEmpty else { return nil }
-        let span = FieldTileGrid.tileSpan(z: z)
-        let xs = visibleTiles.map { Double($0.x) * span }
-        let ys = visibleTiles.map { Double($0.y) * span }
-        guard let minX = xs.min(), let maxX = xs.max(),
-              let minY = ys.min(), let maxY = ys.max() else { return nil }
-        return (minX, minY, maxX - minX + span, maxY - minY + span, z)
-    }
-
-    /// The tiles the FORECAST needs that the viewport does not.
-    ///
-    /// An extrapolated frame slides the newest scan across the map, so the ground
-    /// that ends up on screen an hour out is ground currently sitting OFF it,
-    /// upwind. Without this the future half of the loop marches a clean edge in
-    /// from the border of the viewport — a wall of "no rain" that is really just a
-    /// wall of "not fetched".
-    private func upwindTiles() -> [FieldTileGrid.Tile] {
-        guard let motion = radar.motion, let patch = visiblePatch() else { return [] }
-        let lead = radar.forecastHorizon
-        let shiftX = motion.dx * lead, shiftY = motion.dy * lead
-        guard abs(shiftX) > 1 || abs(shiftY) > 1 else { return [] }
-        let known = Set(visibleTiles)
-        return FieldTileGrid.tiles(inRectX: patch.x - shiftX, y: patch.y - shiftY,
-                                   width: patch.width, height: patch.height, z: patch.z)
-            .filter { !known.contains($0) }
     }
 
     /// The coarse stand-in for a viewport's tiles. TWO levels up rather than
@@ -356,8 +326,8 @@ struct MapSurfaceView: View {
     /// picture. At 16x a storm is soft but unmistakably a storm in the right
     /// county, which is the whole job while the real tiles are in flight.
     private func overview(of tiles: [FieldTileGrid.Tile]) -> [FieldTileGrid.Tile] {
-        FieldTileGrid.parents(of: tiles, levelsUp: 2,
-                              notBelow: currentSource.zoomRange.lowerBound)
+        guard let source = currentSource else { return [] }
+        return FieldTileGrid.parents(of: tiles, levelsUp: 2, notBelow: source.zoomRange.lowerBound)
     }
 
     /// Neither of these services takes a TIME argument, so "refresh" means asking
@@ -377,10 +347,30 @@ struct MapSurfaceView: View {
     /// walks every stamp against every visible tile — a couple of hundred cache
     /// lookups — and doing that sixty times a second to update a line of text
     /// nobody reads that fast would cost more than the dissolve it sits next to.
+    /// Say what is outstanding when the map has been incomplete for a while —
+    /// once every fifteen seconds, in the radar log, so a stall can be read
+    /// rather than guessed at.
+    private func reportIfStuck(_ now: FieldTileStore.Progress) {
+        guard surface == .radar, radar.scansReady < radar.frames.count,
+              let since = incompleteSince, Date().timeIntervalSince(since) > 15,
+              Date().timeIntervalSince(lastStuckReport ?? .distantPast) > 15 else { return }
+        lastStuckReport = Date()
+        let flying = FieldTileStore.shared.inFlightSample()
+        let site = radar.site?.id ?? "none"
+        Task {
+            let frames = await Level2Frames.shared.snapshot()
+            radarLog.notice("""
+                STUCK \(site, privacy: .public): held \(now.held)/\(now.wanted), inFlight \(now.inFlight), \
+                failed \(now.failed), frames \(now.readyFrames)/\(now.frameCount); \
+                store inFlight \(flying.total) e.g. \(flying.keys, privacy: .public); \(frames, privacy: .public)
+                """)
+        }
+    }
+
     private func watchProgress() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))
-            guard !visibleTiles.isEmpty else { progress = .init(); continue }
+            guard !visibleTiles.isEmpty, let currentSource else { progress = .init(); continue }
             let now = FieldTileStore.shared.progress(stamps: currentStamps,
                                                      tiles: visibleTiles,
                                                      from: currentSource)
@@ -398,8 +388,18 @@ struct MapSurfaceView: View {
                 ? 0
                 : FieldTileStore.shared.progress(stamps: onScreenStamps, tiles: visibleTiles,
                                                  from: currentSource).failed
-            if now.isComplete { incompleteSince = nil }
+            if now.isComplete { incompleteSince = nil; lastStuckReport = nil }
             else if incompleteSince == nil { incompleteSince = Date() }
+            reportIfStuck(now)
+            // THE BACKSTOP. Missing tiles with nothing in flight and nothing
+            // recently refused means no one is going to fetch them — a trigger was
+            // missed, or the cache evicted under memory pressure while the app sat
+            // open. Asking again is cheap (`fetch` skips anything held or flying)
+            // and it is what makes a map left open for days converge rather than
+            // depend on every trigger having fired.
+            if !now.isComplete, now.inFlight == 0, now.failed == 0 {
+                prefetch(layerID: currentLayerID, tiles: visibleTiles)
+            }
         }
     }
 
@@ -419,6 +419,14 @@ struct MapSurfaceView: View {
     /// empty queue releases it too: once nothing is in flight, this is as good as
     /// it is going to get.
     private var loopIsReady: Bool {
+        // RADAR IS READY WHEN ITS SCANS ARE. Every tile is drawn from a decoded
+        // scan in a few milliseconds, so "ready" is the network part only —
+        // counting cached tiles made the loop stall whenever macOS emptied the
+        // cache under memory pressure. A tile missing at draw time is redrawn
+        // then, from its parent first, without holding anything up.
+        if surface == .radar {
+            return !radar.frames.isEmpty && radar.scansReady == radar.frames.count
+        }
         // NOT MEASURED YET IS NOT THE SAME AS NOTHING OUTSTANDING. Progress starts
         // empty, and an empty `inFlight` would otherwise read as "all done" for
         // the moment between the map appearing and the first prefetch being fired
@@ -437,8 +445,13 @@ struct MapSurfaceView: View {
         // The INDEX failed, so there is no loop at all — a different and worse
         // problem than tiles not arriving, and it gets said first.
         if surface == .radar, radar.failure != nil {
-            return FieldStatus(message: "Can't reach the radar service",
-                               detail: "Check your connection", canRetry: true)
+            return FieldStatus(message: "Can't load \(radar.site?.id ?? "the radar")",
+                               detail: radar.failure, canRetry: true)
+        }
+        if surface == .radar, radar.site == nil {
+            return FieldStatus(message: "No radar chosen",
+                               detail: "Set your home, or pick a radar in the panel",
+                               canRetry: false)
         }
         if surface == .radar, radar.tilesRefused {
             return FieldStatus(message: "The weather service is busy",
@@ -458,7 +471,15 @@ struct MapSurfaceView: View {
         }
         // Only after it has been incomplete for a beat. A pan that resolves in
         // 300ms should say nothing.
-        if !progress.isComplete, progress.wanted > 0,
+        // RADAR: SCANS, NOT TILES. See `RadarModel.scansReady`.
+        if surface == .radar {
+            let ready = radar.scansReady, total = radar.frames.count
+            if total > 0, ready < total {
+                return FieldStatus(message: "Loading the last hour",
+                                   detail: "\(ready) of \(total) scans downloaded",
+                                   canRetry: false, fraction: Double(ready) / Double(total))
+            }
+        } else if !progress.isComplete, progress.wanted > 0,
            let since = incompleteSince, Date().timeIntervalSince(since) > 0.6 {
             return FieldStatus(message: loadingMessage, detail: loadingDetail,
                                canRetry: false, fraction: progress.fraction)
@@ -481,17 +502,7 @@ struct MapSurfaceView: View {
     /// AND IT SAYS WHY THE LOOP IS NOT MOVING. "4 of 10 frames ready" on its own
     /// invites the reading that the app is stuck; naming what you ARE being shown
     /// makes a held picture a decision rather than a fault.
-    private var loadingDetail: String? {
-        guard surface == .radar, progress.frameCount > 0 else { return nil }
-        let counted = "\(progress.readyFrames) of \(progress.frameCount) frames sharp"
-        // THREE DIFFERENT SITUATIONS, AND THE MIDDLE ONE IS THE NEW COMMON CASE.
-        // A loop running off the coarse pass is not waiting for anything you need
-        // to know about — it is already showing you the weather and the detail is
-        // filling in, so saying "showing the newest" there would be a lie about a
-        // loop that is plainly moving.
-        if coarseReady && !progress.isComplete { return counted + " · sharpening" }
-        return loopIsReady ? counted : counted + " · showing the newest"
-    }
+    private var loadingDetail: String? { nil }
 
     private func retry() {
         FieldTileStore.shared.clearFailures()
@@ -526,6 +537,16 @@ struct MapSurfaceView: View {
             // layer is information rather than clutter.
             caption: outlines.isEmpty ? "none" : "\(outlines.count)"))
 
+        // What the chosen radar can see. Only under the radar view, and only once
+        // a scan has decoded — the rings are read from it.
+        if surface == .radar, let coverage = radar.coverage {
+            built.append(MapLayer(
+                id: "coverage", name: "Radar range", symbol: "scope",
+                role: .context, isOn: context.contains("coverage"),
+                content: .coverage(coverage),
+                caption: "\(coverage.rings.last?.miles ?? 0) mi"))
+        }
+
         // YOU, last, so the dot is never buried under a field. A radar picture
         // answers "is it about to rain on me", and that question is unanswerable
         // without the "me".
@@ -545,14 +566,26 @@ struct MapSurfaceView: View {
     private var subjectLayer: MapLayer {
         switch surface {
         case .radar:
+            // No site yet means nothing to draw — said in the status bar, not
+            // left as an empty map that reads as clear sky.
+            guard let radarSource else {
+                return MapLayer(id: "radar", name: "Radar", symbol: surface.symbol,
+                                role: .subject, isOn: true, content: .pins([]),
+                                caption: "no radar")
+            }
             return MapLayer(
                 id: "radar", name: "Radar", symbol: surface.symbol,
                 role: .subject, isOn: true,
                 content: .field(FieldLayer(source: radarSource,
                                            stamps: radar.stamps,
-                                           playhead: playhead(radar.playhead.a,
-                                                              radar.playhead.b,
-                                                              blend: radar.playhead.blend))),
+                                           // Mode-aware here too: this is pushed on
+                                           // every SwiftUI pass, and a loop playhead
+                                           // arriving mid-sweep would tear the line
+                                           // down between display ticks.
+                                           playhead: (radar.mode == .sweep ? sweepPlayhead() : nil)
+                                               ?? playhead(radar.playhead.a,
+                                                           radar.playhead.b,
+                                                           blend: radar.playhead.blend))),
                 caption: radarCaption)
         case .cloud:
             return MapLayer(
@@ -584,7 +617,7 @@ struct MapSurfaceView: View {
         if radar.failure != nil { return "unavailable" }
         if radar.tilesRefused { return "tiles refused" }
         if radar.isStale { return "stale" }
-        return radar.currentObservation.map {
+        return radar.frames.last.map {
             $0.time.formatted(date: .omitted, time: .shortened)
         } ?? "—"
     }
@@ -619,6 +652,9 @@ struct MapSurfaceView: View {
                           context: $context,
                           band: $band,
                           fireProduct: $fireProduct,
+                          radarSite: $radarSiteChoice,
+                          radarMode: $radarModeChoice,
+                          home: settings.homeCoordinate,
                           captions: captions,
                           contextLayers: layers.filter { $0.role == .context },
                           recenter: recenter)
@@ -641,13 +677,18 @@ struct MapSurfaceView: View {
     /// The other two views are stills and a scrub strip under them would be a
     /// control for a dimension they do not have.
     @ViewBuilder private var timeline: some View {
-        if surface == .radar, !radar.loop.isEmpty {
-            RadarScrubBar(loop: radar.loop,
+        if surface == .radar, !radar.frames.isEmpty, radar.mode == .sweep {
+            SweepBar(site: radar.site?.id ?? "",
+                     shown: radar.frames.first { $0.key == radar.sweepShown },
+                     revealing: radar.frames.first { $0.key == radar.sweepRevealing },
+                     facts: radar.scanFacts,
+                     newest: radar.frames.last,
+                     interval: radar.scanInterval,
+                     dish: radar.dish)
+        } else if surface == .radar, !radar.frames.isEmpty {
+            RadarScrubBar(loop: radar.frames,
                           index: radar.index,
-                          nowIndex: radar.nowIndex,
                           isPlaying: radar.isPlaying,
-                          motion: radar.motion,
-                          latitude: settings.homeCoordinate?.latitude,
                           togglePlay: { radar.isPlaying.toggle() },
                           scrub: { radar.scrub(to: $0) })
         }
@@ -665,6 +706,9 @@ private struct LayerPanel: View {
     @Binding var context: Set<String>
     @Binding var band: SatelliteFieldSource.Band
     @Binding var fireProduct: TexasFireFieldSource.Product
+    @Binding var radarSite: String
+    @Binding var radarMode: RadarModel.Mode
+    let home: CLLocationCoordinate2D?
     let captions: [MapSurface: String]
     let contextLayers: [MapLayer]
     let recenter: (() -> Void)?
@@ -751,9 +795,16 @@ private struct LayerPanel: View {
             }
             .labelsHidden().pickerStyle(.menu).controlSize(.small)
         case .radar:
-            // Nothing yet. The loop's only control is the scrub strip, and that
-            // belongs under the map where the frames are, not in a corner.
-            EmptyView()
+            VStack(alignment: .leading, spacing: 6) {
+                RadarSitePicker(choice: $radarSite, home: home)
+                // Two ways of looking: the loop reads direction, the sweep shows
+                // how the picture is made. See `RadarModel.Mode`.
+                Picker("", selection: $radarMode) {
+                    ForEach(RadarModel.Mode.allCases) { Text($0.label).tag($0) }
+                }
+                .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                .frame(width: 150)
+            }
         }
     }
 
@@ -834,5 +885,67 @@ private struct FieldStatusBar: View {
         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
         .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
         .transition(.opacity)
+    }
+}
+
+// MARK: - Which radar
+
+/// The radar picker: the site nearest home, or a named site.
+///
+/// THE NEAREST FEW, NOT ALL 159. Past about the fifth-closest site the radar is
+/// too far away to see anything low over you — at 250 km the 0.5° beam is 5 km
+/// up, above most rain — so a list of every site would mostly be choices that
+/// are wrong for where you are. The full list is one level down for the day you
+/// are watching somebody else's weather.
+private struct RadarSitePicker: View {
+    @Binding var choice: String
+    let home: CLLocationCoordinate2D?
+
+    private var nearby: [(site: RadarSite, miles: Int)] {
+        guard let home else { return [] }
+        return RadarSites.nearest(latitude: home.latitude, longitude: home.longitude, count: 5).map {
+            ($0, Int($0.distance(toLatitude: home.latitude, longitude: home.longitude) / 1609.34))
+        }
+    }
+
+    private var label: String {
+        if let site = RadarSites.site(choice) { return "\(site.id) · \(site.name)" }
+        return nearby.first.map { "Nearest · \($0.site.id)" } ?? "Choose a radar"
+    }
+
+    var body: some View {
+        Menu {
+            if let nearest = nearby.first {
+                Picker("", selection: $choice) {
+                    Text("Nearest to home (\(nearest.site.id))").tag("auto")
+                }
+                .pickerStyle(.inline)
+            }
+
+            if !nearby.isEmpty {
+                Section("Near home") {
+                    Picker("", selection: $choice) {
+                        ForEach(nearby, id: \.site.id) { entry in
+                            Text("\(entry.site.id) · \(entry.site.name) · \(entry.miles) mi").tag(entry.site.id)
+                        }
+                    }
+                    .pickerStyle(.inline)
+                }
+            }
+
+            Menu("All sites") {
+                Picker("", selection: $choice) {
+                    ForEach(RadarSites.all) { site in
+                        Text("\(site.id) · \(site.name)").tag(site.id)
+                    }
+                }
+                .pickerStyle(.inline)
+            }
+        } label: {
+            Text(label).lineLimit(1)
+        }
+        .menuStyle(.borderlessButton)
+        .controlSize(.small)
+        .fixedSize()
     }
 }

@@ -9,8 +9,7 @@
 //  own idea of a background. Dropped straight onto a map that is the end of the
 //  map: the roads that say WHERE the weather is disappear underneath it. So each
 //  source turns its own quantity into an alpha, and the map keeps showing through
-//  where the field has nothing to say. Radar learned this the expensive way (see
-//  `RadarTileShading`); the others inherit it rather than repeat it.
+//  where the field has nothing to say.
 //
 //  WHAT IS DELIBERATELY NOT HERE. The 500 mb flow is not a raster field — it is a
 //  height grid that becomes contours and barbs, and `UpperAirFlow` already
@@ -23,64 +22,12 @@ import Foundation
 import CoreGraphics
 import ImageIO
 
-// MARK: - Radar
-
-/// NEXRAD base reflectivity, the loop this whole substrate was built for.
-public struct RadarFieldSource: FieldTileSource {
-    public var curve: RadarTileShading.Curve
-
-    /// The curve is IN THE ID because it is in the pixels. Two curves sharing an
-    /// id would mean changing the shading silently kept showing the old one until
-    /// the cache turned over.
-    public var id: String { "nexrad-n0q-\(curve.floor)-\(curve.solid)-\(curve.minAlpha)-\(curve.maxAlpha)" }
-
-    /// CLAMPED AT 8, AND THE MEASUREMENT IS THE WHOLE ARGUMENT.
-    ///
-    /// This was 10, on the reasoning that 76 m per pixel against a roughly 1 km
-    /// composite was already generous. It was generous by two more levels than
-    /// that, and the cost was not theoretical — tiles go up fourfold per level, so
-    /// a ten-frame loop over a laptop viewport was 300 requests.
-    ///
-    /// Measured against IEM, same scan, each level upscaled nearest to the same
-    /// ground and compared against a z11 render:
-    ///
-    ///     z10   23.6% of pixels differ      z9   3.2%      z8   4.8%      z7   9.8%
-    ///
-    /// z10 differs from z11 MORE than z9 does, which is the giveaway: past z9 the
-    /// service is not resolving anything, it is resampling, and two renders of the
-    /// same 1 km cells disagree with each other. Side by side, z8 through z11 are
-    /// the same picture — same cells, same edges, same colours.
-    ///
-    /// What the two levels bought, measured on the same viewport:
-    ///
-    ///     z10   300 requests, 17.0 s        z8   40 requests, 2.6 s
-    ///
-    /// Seventeen seconds of a frozen loop for pixels nobody can tell apart. The
-    /// clamp scales the nearest level up rather than blanking — see
-    /// `Radar.tileURL` for why MapKit's own min/max zoom could not do this — so
-    /// zooming past it shows the 1 km bins as 1 km bins, which is what the radar
-    /// actually measured.
-    public var zoomRange: ClosedRange<Int> { 3...8 }
-    public var tileSize: Int { Radar.tileSize }
-
-    public init(curve: RadarTileShading.Curve = .standard) { self.curve = curve }
-
-    public func url(stamp: String, z: Int, x: Int, y: Int) -> URL? {
-        Radar.tileURL(stamp: stamp, z: z, x: x, y: y, size: tileSize)
-    }
-
-    public func process(_ data: Data) -> CGImage? {
-        RadarTileShading.shadeImage(data, curve: curve)
-    }
-}
-
 // MARK: - Satellite cloud
 
-/// GOES-East ABI, from the same Iowa State mesonet that serves the radar.
+/// GOES-East ABI, from the Iowa State mesonet.
 ///
-/// NOT A LOOP, AND THE SERVICE IS WHY. The NEXRAD endpoint is time-enabled — you
-/// name a five-minute valid time and it renders that scan, which is what lets the
-/// radar be scrubbed back fifty minutes. `goes_east.cgi` publishes no TIME
+/// NOT A LOOP, AND THE SERVICE IS WHY. The radar loop can be scrubbed back
+/// because every Level II volume is kept as its own file. `goes_east.cgi` publishes no TIME
 /// dimension at all: it renders the latest imagery and nothing else. So this is a
 /// layer showing NOW, refreshed on the ABI cadence, and the app does not offer a
 /// timeline it cannot honour.
@@ -206,7 +153,7 @@ public struct SatelliteFieldSource: FieldTileSource {
             .init(name: "REQUEST", value: "GetMap"),
             .init(name: "LAYERS", value: band.layer),
             .init(name: "SRS", value: "EPSG:3857"),
-            .init(name: "BBOX", value: Radar.tileBBox(z: z, x: x, y: y)),
+            .init(name: "BBOX", value: FieldTileGrid.bbox3857(z: z, x: x, y: y)),
             .init(name: "WIDTH", value: "\(tileSize)"),
             .init(name: "HEIGHT", value: "\(tileSize)"),
             .init(name: "FORMAT", value: "image/png"),
@@ -319,11 +266,11 @@ public struct TexasFireFieldSource: FieldTileSource {
     /// bounding box and a pixel size in, a rendered image out. `bboxSR` and
     /// `imageSR` both have to be named or the service answers in the service's
     /// own projection and the result lands in the wrong place — the same failure
-    /// `Radar.tileBBox` exists to prevent, and just as quiet.
+    /// `FieldTileGrid.bbox3857` exists to prevent, and just as quiet.
     public func url(stamp: String, z: Int, x: Int, y: Int) -> URL? {
         var components = URLComponents(string: "\(Self.host)/\(product.service)/MapServer/export")
         components?.queryItems = [
-            .init(name: "bbox", value: Radar.tileBBox(z: z, x: x, y: y)),
+            .init(name: "bbox", value: FieldTileGrid.bbox3857(z: z, x: x, y: y)),
             .init(name: "bboxSR", value: "3857"),
             .init(name: "imageSR", value: "3857"),
             .init(name: "size", value: "\(tileSize),\(tileSize)"),
@@ -351,9 +298,8 @@ public struct TexasFireFieldSource: FieldTileSource {
 
 /// Decode a tile, rewrite every pixel, hand back an image.
 ///
-/// One buffer walk shared by every source that is not radar. Radar keeps its own
-/// in `RadarTileShading` because it memoises a colour-to-ramp lookup that only
-/// makes sense against a known legend.
+/// One buffer walk shared by every fetched source. Radar is not one: its tiles
+/// are drawn from measurements, not recoloured from pictures.
 public enum FieldPixels {
 
     /// `transform` returns the new colour and alpha (alpha 0...1), or nil to drop

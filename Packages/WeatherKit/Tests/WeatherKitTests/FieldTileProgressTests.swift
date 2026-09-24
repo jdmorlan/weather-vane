@@ -73,8 +73,8 @@ final class FieldTileProgressTests: XCTestCase {
         let store = FieldTileStore()
         store.clearFailures()
         let tiles = [FieldTileGrid.Tile(z: 5, x: 1, y: 1)]
-        let source = RadarFieldSource()
-        let p = store.progress(stamps: ["2026-09-16T20:55:00Z"], tiles: tiles, from: source)
+        let source = Level2FieldSource(site: "KFWS")
+        let p = store.progress(stamps: ["KFWS20260916_205500_V06"], tiles: tiles, from: source)
         XCTAssertEqual(p.wanted, 1)
         XCTAssertEqual(p.failed, 0)
         XCTAssertEqual(p.held, 0)

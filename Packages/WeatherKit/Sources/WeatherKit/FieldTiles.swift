@@ -62,6 +62,11 @@ public protocol FieldTileSource: Sendable {
     /// zoomed past what the underlying observation resolves.
     var zoomRange: ClosedRange<Int> { get }
 
+    /// The most tile pixels worth drawing per SCREEN POINT. Nil means match the
+    /// display (2 on retina). A field coarser than the screen gains nothing from
+    /// retina tiles but four times the tiles — see `Level2FieldSource`.
+    var maxPixelScale: Double? { get }
+
     func url(stamp: String, z: Int, x: Int, y: Int) -> URL?
 
     /// Bytes to pixels, including whatever shading the field wants. Returning nil
@@ -72,6 +77,26 @@ public protocol FieldTileSource: Sendable {
 public extension FieldTileSource {
     var tileSize: Int { 512 }
     var zoomRange: ClosedRange<Int> { 3...10 }
+    var maxPixelScale: Double? { nil }
+}
+
+/// A field whose tiles are DRAWN HERE rather than fetched as pictures.
+///
+/// Level II radar is the reason: the service hands over measurements, not
+/// tiles, so there is no URL for "z9/118/210" — the tile is made on this device
+/// from a decoded scan. Everything past that point is the same as any other
+/// field: the store caches the image under the same key, broadcasts its arrival
+/// the same way, and the renderer never knows where it came from.
+public protocol RenderedFieldTileSource: FieldTileSource {
+    /// The finished tile, or nil when this stamp cannot be drawn (the scan would
+    /// not download or decode). A tile with nothing in it is a clear image, not
+    /// nil — clear sky is an answer, and nil is remembered as a failure.
+    func render(stamp: String, z: Int, x: Int, y: Int) async -> CGImage?
+}
+
+public extension RenderedFieldTileSource {
+    func url(stamp: String, z: Int, x: Int, y: Int) -> URL? { nil }
+    func process(_ data: Data) -> CGImage? { nil }
 }
 
 // MARK: - Tile arithmetic
@@ -79,7 +104,7 @@ public extension FieldTileSource {
 /// Slippy-tile maths against MapKit's flat map space.
 ///
 /// THIS IS THE PART THAT CANNOT BE SLIGHTLY WRONG, for the same reason
-/// `Radar.tileBBox` cannot: an error here does not fail loudly, it slides the
+/// `bbox3857` cannot: an error here does not fail loudly, it slides the
 /// returns off the town they are actually over. Kept free of MapKit types so it
 /// can be checked against known values in a test rather than on screen.
 public enum FieldTileGrid {
@@ -91,6 +116,23 @@ public enum FieldTileGrid {
     public struct Tile: Hashable, Sendable {
         public let z: Int, x: Int, y: Int
         public init(z: Int, x: Int, y: Int) { self.z = z; self.x = x; self.y = y }
+    }
+
+    /// Web-Mercator half-circumference in metres — the edge of the EPSG:3857 world.
+    static let mercatorExtent = 20_037_508.342789244
+
+    /// The EPSG:3857 bounding box of a slippy tile, as a WMS wants it:
+    /// `minX,minY,maxX,maxY`. What the satellite and fire sources ask for.
+    ///
+    /// ARITHMETIC THAT CANNOT BE SLIGHTLY WRONG. A tile service is handed z/x/y
+    /// and works the projection out itself; a WMS is handed metres and draws
+    /// exactly what you asked for, so an error here does not fail — it shifts the
+    /// field off the ground it is actually over.
+    public static func bbox3857(z: Int, x: Int, y: Int) -> String {
+        let span = 2 * mercatorExtent / pow(2, Double(z))
+        let minX = -mercatorExtent + Double(x) * span
+        let maxY = mercatorExtent - Double(y) * span
+        return "\(minX),\(maxY - span),\(minX + span),\(maxY)"
     }
 
     /// Which zoom level to draw, for a MapKit zoom scale.
@@ -241,13 +283,33 @@ public final class FieldTileStore: @unchecked Sendable {
 
     private let cache: NSCache<NSString, CGImageBox> = {
         let cache = NSCache<NSString, CGImageBox>()
-        // A loop of ten frames over a laptop-sized viewport is roughly twenty
-        // 512² RGBA tiles per frame — about 200 MB at the very widest. The limit
-        // is sized to hold one loop plus the neighbours a pan reaches, and NSCache
-        // evicts under pressure rather than growing without bound.
-        cache.totalCostLimit = 320 * 1024 * 1024
+        // The FLOOR. `prefetch` raises it to fit the loop actually in view; see
+        // `reserve`. NSCache still evicts under system memory pressure.
+        cache.totalCostLimit = FieldTileStore.floorBytes
         return cache
     }()
+
+    static let floorBytes = 320 * 1024 * 1024
+    /// An eighth of the device's memory: ~2 GB on an 18 GB Mac, ~1 GB on an
+    /// 8 GB iPad. Past this a loop is allowed to thrash rather than crowd out
+    /// everything else on the machine.
+    static let ceilingBytes = Int(min(Double(Int.max), Double(ProcessInfo.processInfo.physicalMemory) / 8))
+
+    /// THE CACHE HAS TO HOLD THE LOOP, OR THE LOOP NEVER FINISHES. Measured in
+    /// the running app: a ten-frame Level II loop over a large window wanted 280
+    /// tiles (~280 MB) against a fixed 320 MB limit that also held the coarse
+    /// pass. NSCache evicts before its limit, so tiles were dropped, redrawn and
+    /// dropped again — "held" hovered at 220 of 280 and the frame count ticked
+    /// DOWN on screen. The limit now grows to the loop's own size, with room for
+    /// the coarse pass, and never shrinks while the app runs.
+    private func reserve(bytes: Int) {
+        let wanted = min(Self.ceilingBytes, max(Self.floorBytes, bytes))
+        lock.lock(); defer { lock.unlock() }
+        if wanted > cache.totalCostLimit {
+            radarLog.info("tile cache limit \(self.cache.totalCostLimit / 1_048_576) → \(wanted / 1_048_576) MB")
+            cache.totalCostLimit = wanted
+        }
+    }
 
     private let lock = NSLock()
     private var inFlight: Set<String> = []
@@ -306,10 +368,25 @@ public final class FieldTileStore: @unchecked Sendable {
         // cut the request count by sixteenfold it is a far smaller ask of a free
         // academic service than ten used to be.
         config.httpMaximumConnectionsPerHost = 16
+        // A HARD CEILING ON A WHOLE REQUEST, not just on silence. The per-request
+        // timeout is an IDLE timeout, and the resource default is seven days — so
+        // a connection that went half-dead across a sleep could keep a tile "in
+        // flight" indefinitely, and an in-flight tile is exactly what holds the
+        // loop on "showing the newest". Past this it fails, which the retry path
+        // already handles.
+        config.timeoutIntervalForResource = 60
         return URLSession(configuration: config)
     }()
 
-    public init() {}
+    public init() {
+        cache.delegate = evictionWatcher
+    }
+
+    /// DIAGNOSTICS: counts what NSCache throws away, and says so in the radar
+    /// log at most every few seconds. A loop whose tiles are evicted as fast as
+    /// they land looks exactly like one that never loads, and only this can tell
+    /// the two apart.
+    private let evictionWatcher = EvictionWatcher()
 
     // MARK: Reading
 
@@ -360,6 +437,19 @@ public final class FieldTileStore: @unchecked Sendable {
         guard inFlight.insert(cacheKey).inserted else { lock.unlock(); return }
         lock.unlock()
 
+        if let rendered = source as? RenderedFieldTileSource {
+            // USER-INITIATED, AND CAPPED RATHER THAN DEMOTED. At utility QoS
+            // Apple Silicon keeps this work on the efficiency cores, which made
+            // a slow render several times slower still. The render gate
+            // (`Level2Frames.renders`) is what leaves cores for MapKit and the
+            // interface; the priority only decides which cores the rest get.
+            Task.detached(priority: .userInitiated) { [weak self] in
+                let image = await rendered.render(stamp: key.stamp, z: key.z, x: key.x, y: key.y)
+                self?.land(image, key: key, cacheKey: cacheKey)
+            }
+            return
+        }
+
         guard let url = source.url(stamp: key.stamp, z: key.z, x: key.x, y: key.y) else {
             finish(cacheKey, failed: true)
             return
@@ -383,22 +473,27 @@ public final class FieldTileStore: @unchecked Sendable {
             }
             // Shaded and decoded ONCE, however many frames, pans and dissolve
             // ticks go on to draw it.
-            guard let data, let image = source.process(data) else {
-                self.finish(cacheKey, failed: true)
-                return
-            }
-            self.cache.setObject(CGImageBox(image), forKey: cacheKey as NSString,
-                                 cost: image.height * image.bytesPerRow)
-            self.finish(cacheKey, failed: false)
-
-            // Outside the lock: an observer repaints a map, and holding the
-            // store's lock across that invites the renderer's next `image(for:)`
-            // to deadlock against it.
-            self.lock.lock()
-            let watchers = Array(self.observers.values)
-            self.lock.unlock()
-            for watcher in watchers { watcher(key) }
+            self.land(data.flatMap { source.process($0) }, key: key, cacheKey: cacheKey)
         }.resume()
+    }
+
+    /// A tile has arrived, fetched or drawn: cache it and tell whoever is watching.
+    private func land(_ image: CGImage?, key: Key, cacheKey: String) {
+        guard let image else {
+            finish(cacheKey, failed: true)
+            return
+        }
+        cache.setObject(CGImageBox(image), forKey: cacheKey as NSString,
+                        cost: image.height * image.bytesPerRow)
+        finish(cacheKey, failed: false)
+
+        // Outside the lock: an observer repaints a map, and holding the
+        // store's lock across that invites the renderer's next `image(for:)`
+        // to deadlock against it.
+        lock.lock()
+        let watchers = Array(observers.values)
+        lock.unlock()
+        for watcher in watchers { watcher(key) }
     }
 
     private func finish(_ cacheKey: String, failed: Bool) {
@@ -429,6 +524,8 @@ public final class FieldTileStore: @unchecked Sendable {
     /// under a second and the remaining nine fill in behind it.
     public func prefetch(stamps: [String], tiles: [FieldTileGrid.Tile],
                          from source: FieldTileSource) {
+        // Half again for the coarse pass and the tiles a small pan reaches.
+        reserve(bytes: stamps.count * tiles.count * source.tileSize * source.tileSize * 4 * 3 / 2)
         for stamp in stamps {
             for tile in tiles {
                 fetch(Key(source: source.id, stamp: stamp, z: tile.z, x: tile.x, y: tile.y),
@@ -505,11 +602,37 @@ public final class FieldTileStore: @unchecked Sendable {
 
     /// Forget every refusal, so the next paint asks again immediately. What a
     /// "Try again" button does.
+    /// For diagnostics: how many tiles are in flight, and a few of their keys.
+    public func inFlightSample(_ count: Int = 5) -> (total: Int, keys: [String]) {
+        lock.lock(); defer { lock.unlock() }
+        return (inFlight.count, Array(inFlight.prefix(count)))
+    }
+
     public func clearFailures() {
         lock.lock(); failures.removeAll(); lock.unlock()
     }
 
     public func removeAll() { cache.removeAllObjects() }
+}
+
+final class EvictionWatcher: NSObject, NSCacheDelegate, @unchecked Sendable {
+    private let lock = NSLock()
+    private var count = 0
+    private var bytes = 0
+    private var lastReport = Date.distantPast
+
+    func cache(_ cache: NSCache<AnyObject, AnyObject>, willEvictObject obj: Any) {
+        lock.lock()
+        count += 1
+        if let box = obj as? CGImageBox { bytes += box.image.height * box.image.bytesPerRow }
+        let due = Date().timeIntervalSince(lastReport) > 3
+        let (c, b) = (count, bytes)
+        if due { lastReport = Date(); count = 0; bytes = 0 }
+        lock.unlock()
+        if due {
+            radarLog.notice("tile cache evicted \(c) tiles (\(b / 1_048_576) MB) in the last few seconds; limit \(cache.totalCostLimit / 1_048_576) MB")
+        }
+    }
 }
 
 /// `NSCache` wants an `AnyObject`, and a boxed `CGImage` is cheaper to reason

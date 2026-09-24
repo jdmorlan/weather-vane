@@ -26,6 +26,8 @@ import WeatherKit
 struct StormSurface: View {
     @EnvironmentObject private var settings: TVSettings
     @StateObject private var radar = RadarModel()
+    /// The loop's one clock, on the display's own refreshes. See `TVLoopDriver`.
+    @StateObject private var driver = TVLoopDriver()
     @StateObject private var hazards = TVHazardModel()
     @StateObject private var conditions = TVConditionsModel()
 
@@ -34,13 +36,29 @@ struct StormSurface: View {
     /// come back is a zoom you stop using.
     @State private var range: RadarRange = .nearby
 
+    private var nearestSite: RadarSite? {
+        settings.homePoint.flatMap {
+            RadarSites.nearest(latitude: $0.latitude, longitude: $0.longitude).first
+        }
+    }
+
     var body: some View {
         StationDeck(report: conditions.report,
                     radar: radar,
                     hazards: hazards,
                     home: settings.homeCoordinate,
                     range: $range)
-            .task { await radar.run() }
+            // The radar nearest home, drawn from its own Level II scans. No
+            // picker on the TV: from a sofa the nearest site is the right
+            // answer. Setup always learns home from the station, so there is
+            // always a nearest.
+            .onAppear { radar.site = nearestSite }
+            .onChange(of: settings.homeLat) { _, _ in radar.site = nearestSite }
+            .onAppear { driver.start(radar) }
+            .onDisappear { driver.stop() }
+            // `driving: false` — the display link above moves the loop. Two
+            // drivers would run it at twice the speed.
+            .task { await radar.run(driving: false) }
             .task { await hazards.poll(point: settings.homePoint) }
             .task {
                 guard settings.hasStation else { return }

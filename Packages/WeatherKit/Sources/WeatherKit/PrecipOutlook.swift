@@ -29,7 +29,8 @@
 //
 //  NOT A MAP LAYER, AND THAT IS DELIBERATE. These are hourly ACCUMULATIONS at a
 //  point, not reflectivity. Drawn as a raster they would look like radar and mean
-//  something else entirely — see `Nowcast.swift` for the loop's own honesty rule.
+//  something else entirely. The radar loop's rule is that every frame is a
+//  measurement; a raster of model accumulations would quietly break it.
 //
 
 import Foundation

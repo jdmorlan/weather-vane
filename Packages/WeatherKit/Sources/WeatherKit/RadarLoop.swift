@@ -4,61 +4,26 @@
 //  The radar loop and its tile overlay, shared by every target that draws one.
 //
 //  These types lived in the Mac app's view file until the TV needed the same
-//  loop. Nothing in them is about a Mac — `RadarModel` owns an index of scans and
-//  a clock that walks it, and `RadarTileOverlay` turns a frame and a tile path
-//  into a WMS request. Keeping them here is what stops the two apps drifting into
-//  two different ideas of how fast a loop runs.
+//  loop. Nothing in them is about a Mac — `RadarModel` owns a list of scans and a
+//  clock that walks it. Keeping them here is what stops the apps drifting into
+//  different ideas of how fast a loop runs.
 //
-//  TWO RENDERING PATHS, ON PURPOSE AND TEMPORARILY. The Mac draws the loop
-//  through `FieldRenderer`, which owns its own pixels and dissolves between
-//  frames; the TV still draws it through `RadarTileOverlay` and MapKit's tile
-//  machinery. `RadarModel` serves both because it is about WHICH SCANS EXIST and
-//  WHERE THE LOOP IS, and neither of those is a rendering question. The TV moves
-//  over to the field renderer once the Mac's version has earned it.
+//  ONE RENDERING PATH. Mac, iPad and TV all draw the loop through the app's
+//  `FieldRenderer`, which owns its own pixels and dissolves between frames. The
+//  TV used to have its own `MKTileOverlay` path — hard cuts between frames and a
+//  PNG round-trip per tile — and it was retired when the TV moved over.
 //
-//  WHAT WENT AWAY. `RadarWarmer` used to sit here, fetching tiles for frames
-//  MapKit was not drawing, because a renderer at alpha 0 is never asked for any.
-//  It solved half the problem and could not solve the other half: the tile still
-//  had to be decoded and drawn at the moment it became visible. The field
-//  renderer computes the viewport's tiles directly and prefetches every frame at
-//  once, which is both more direct and correct across a pan — the warmer's tile
-//  set was learned by watching the visible frame ask for tiles, so it was always
-//  one blank pass behind the map.
+//  OBSERVATIONS ONLY. The loop used to run on past the newest scan into an hour
+//  of "forecast" — the newest picture slid along a measured motion vector. It
+//  was removed because it did not do the job: a blob translated across the map
+//  does not grow, decay, split or turn, which is everything storms actually do,
+//  and it looked exactly like what it was. Every frame here is now something a
+//  radar measured.
 //
 
 import Foundation
 import Combine
 import MapKit
-
-/// ONE STEP OF THE LOOP, observed or forecast.
-///
-/// THE POINT OF THE TYPE IS THAT THE LOOP DOES NOT CARE WHICH. A forecast frame
-/// is the newest scan's `stamp` with an OFFSET — the same decoded tiles, drawn
-/// somewhere else — so the clock walks past and future identically and the
-/// renderer needs one extra pair of numbers rather than a second code path. The
-/// timeline is the one place the difference is meant to show, and `lead` is how
-/// it knows.
-public struct LoopFrame: Identifiable, Equatable, Sendable {
-    /// When this frame is a picture OF. Real clock time either way, which is what
-    /// lets the timeline lay past and future out on one axis.
-    public let time: Date
-    /// The scan whose tiles are drawn. A forecast reuses the newest observation's.
-    public let stamp: String
-    /// Where to draw them, in map points. Zero for an observation.
-    public let offsetX: Double
-    public let offsetY: Double
-    /// Seconds ahead of the newest observation. Zero and below is observed.
-    public let lead: TimeInterval
-
-    public var id: String { "\(stamp)|\(Int(lead))" }
-    public var isForecast: Bool { lead > 0 }
-
-    public init(time: Date, stamp: String, offsetX: Double = 0, offsetY: Double = 0,
-                lead: TimeInterval = 0) {
-        self.time = time; self.stamp = stamp
-        self.offsetX = offsetX; self.offsetY = offsetY; self.lead = lead
-    }
-}
 
 @MainActor
 public final class RadarModel: ObservableObject {
@@ -67,9 +32,170 @@ public final class RadarModel: ObservableObject {
     @Published public var isPlaying = true
     @Published public var range: RadarRange = .nearby
 
-    /// WHERE THE LOOP IS, as a continuous position. The thing that used to be a
-    /// bare `Int` advanced on a timer — see `FieldLoopClock` for why that could
-    /// only ever produce cuts.
+    /// WHICH RADAR. Nil only when none has been chosen yet — with no home set
+    /// there is no "nearest", and the view says so rather than guessing a site.
+    ///
+    /// Setting it reloads: the loop's frames are a different list of scans. The
+    /// field source follows from it (see `fieldSource`), so a view never has to
+    /// keep the two in step itself.
+    @Published public var site: RadarSite? {
+        didSet {
+            guard site != oldValue else { return }
+            frames = []
+            archiveFrames = []
+            livePasses = []
+            dish = nil
+            live = site.map { Level2Live(site: $0.id) }
+            coverage = nil
+            failure = nil
+            scanFacts = [:]
+            sweepClock = SweepClock()
+            publishSweep()
+            rebuildLoop(keepingEnd: true)
+            Task { await load() }
+        }
+    }
+
+    /// The tiles to draw for this loop, or nil with no site chosen.
+    public var fieldSource: Level2FieldSource? { site.map { Level2FieldSource(site: $0.id) } }
+
+    /// What the chosen radar can see — its reach and how high its beam is at
+    /// each distance. Nil until the first scan decodes: the rings are read from
+    /// the data, never assumed.
+    @Published public private(set) var coverage: RadarCoverage?
+
+    // MARK: Sweep mode
+
+    /// LOOP OR SWEEP — two ways of looking, not a setting on one. The loop plays
+    /// the last ten scans in quick order so your eye reads DIRECTION; sweep mode
+    /// turns a line round the radar and draws each new scan in as it passes, so
+    /// you see how the picture is MADE. See `SweepClock`.
+    public enum Mode: String, CaseIterable, Identifiable, Sendable {
+        case loop, sweep
+        public var id: String { rawValue }
+        public var label: String { self == .loop ? "Loop" : "Sweep" }
+    }
+
+    @Published public var mode: Mode = .loop {
+        didSet {
+            guard mode != oldValue, mode == .sweep else { return }
+            // In with a demonstration: the scan before the newest on screen, so
+            // the first turn sweeps the newest in rather than turning over a
+            // picture that never changes.
+            sweepClock.show(frames.count > 1 ? frames[frames.count - 2].key : frames.last?.key)
+            publishSweep()
+        }
+    }
+
+    /// The line's clock. NOT `@Published` — it moves every display refresh.
+    /// `sweepShown` and `sweepRevealing` are what SwiftUI watches.
+    public private(set) var sweepClock = SweepClock()
+    @Published public private(set) var sweepShown: String?
+    @Published public private(set) var sweepRevealing: String?
+
+    /// What each scan's own sweep was like: where the dish started and how long
+    /// it took. Read from the decoded scans as they arrive — the same decode the
+    /// tiles use — and needed before a scan can be swept in, because the line
+    /// waits for the scan's real starting azimuth.
+    public struct ScanFacts: Equatable, Sendable {
+        public let startAzimuth: Double
+        public let duration: Double
+    }
+    @Published public private(set) var scanFacts: [String: ScanFacts] = [:]
+
+    /// HOW MANY OF THE LOOP'S SCANS ARE DOWNLOADED AND DECODED — the only part
+    /// of loading that waits on the network, and so the only honest measure of
+    /// it. Tiles are drawn from these in milliseconds; counting tiles instead
+    /// meant that when macOS emptied the tile cache under memory pressure (the
+    /// log showed 269 tiles dropped at once) the map claimed to be "loading" a
+    /// loop it already had every byte of.
+    public var scansReady: Int { frames.filter { scanFacts[$0.key] != nil }.count }
+
+    /// How often this site has been finishing volumes lately — the median gap
+    /// between the loop's scans. Four to five minutes in rain, closer to ten in
+    /// clear air.
+    public var scanInterval: TimeInterval? {
+        let gaps = zip(frames, frames.dropFirst()).map { $1.time.timeIntervalSince($0.time) }.sorted()
+        return gaps.isEmpty ? nil : gaps[gaps.count / 2]
+    }
+
+    private func publishSweep() {
+        if sweepShown != sweepClock.shown { sweepShown = sweepClock.shown }
+        let revealing = sweepClock.revealing?.scan.stamp
+        if sweepRevealing != revealing { sweepRevealing = revealing }
+    }
+
+    private func advanceSweep(by delta: Double) {
+        var next: SweepClock.Scan?
+        if sweepClock.revealing == nil,
+           let stamp = SweepClock.next(after: sweepClock.shown, in: stamps),
+           let facts = scanFacts[stamp] {
+            next = SweepClock.Scan(stamp: stamp, startAzimuth: facts.startAzimuth)
+        }
+        sweepClock.advance(by: delta, next: next)
+        publishSweep()
+    }
+
+    /// Read each scan's start azimuth and sweep time. Cheap: every one of these
+    /// is already decoded, or about to be, for its tiles.
+    private func learnScanFacts() async {
+        for frame in frames.reversed() where scanFacts[frame.key] == nil {
+            guard let decoded = await Level2Frames.shared.frame(for: frame.key),
+                  let first = decoded.sweep.path.first else { continue }
+            scanFacts[frame.key] = ScanFacts(startAzimuth: Double(first.azimuth),
+                                             duration: decoded.sweep.duration)
+        }
+    }
+
+    // MARK: Live
+
+    /// Scans from the archive: finished volumes, seven or more minutes old.
+    private var archiveFrames: [RadarFrame] = []
+    /// Lowest-tilt passes from the realtime feed, seconds to a minute old. Each
+    /// supersedes the archive file for the same volume, and in SAILS mode a
+    /// volume contributes more than one.
+    private var livePasses: [RadarFrame] = []
+    private var live: Level2Live?
+
+    /// What the dish is doing right now, from the realtime feed's listing. Nil
+    /// until the first poll, or when the feed has nothing for this site.
+    @Published public private(set) var dish: Level2Live.Dish?
+
+    /// How often to look at the realtime bucket. Chunks post about every ten
+    /// seconds; one listing request per look.
+    private let liveEvery: Duration = .seconds(10)
+
+    private func pollLive() async {
+        guard let live, let site else { return }
+        let (passes, state) = await live.poll()
+        guard self.site == site else { return }
+        if state != dish { dish = state }
+        let new = passes.map { RadarFrame(time: $0.time, key: $0.stamp) }
+            .filter { pass in !livePasses.contains { $0.key == pass.key } }
+        guard !new.isEmpty else { return }
+        livePasses = Array((livePasses + new).sorted { $0.time < $1.time }.suffix(12))
+        mergeFrames()
+        await learnScanFacts()
+    }
+
+    /// The loop: archive files not superseded by a live pass, plus the live
+    /// passes, newest ten.
+    private func mergeFrames() {
+        let superseded = Set(livePasses.compactMap { $0.key.split(separator: "#").first.map(String.init) })
+        let merged = (archiveFrames.filter { !superseded.contains($0.key) } + livePasses)
+            .sorted { $0.time < $1.time }
+            .suffix(10)
+        let next = Array(merged)
+        guard next != frames else { return }
+        frames = next
+        rebuildLoop(keepingEnd: true)
+    }
+
+    /// Who to credit on screen.
+    public var credit: String { Level2Client.credit }
+
+    /// WHERE THE LOOP IS, as a continuous position. See `FieldLoopClock` for why
+    /// a bare `Int` advanced on a timer could only ever produce cuts.
     ///
     /// DELIBERATELY NOT `@Published`. It changes on every display refresh, and
     /// publishing that would run a full SwiftUI update pass sixty times a second
@@ -87,51 +213,25 @@ public final class RadarModel: ObservableObject {
         if clock.index != before || clock.frameCount != beforeCount { objectWillChange.send() }
     }
 
-    /// Which frame is being drawn. Kept as its own published value because that
-    /// is the question a timeline, a caption and the TV's overlay swap all ask,
-    /// and none of them care that there is a dissolve underneath.
+    /// Which frame is being drawn.
     public var index: Int { clock.index }
 
-    /// THE WHOLE WALK: every observation, then every forecast step. Rebuilt
-    /// whenever the scans or the motion change, and published because its LENGTH
-    /// and its seam are what the timeline draws.
-    @Published public private(set) var loop: [LoopFrame] = []
-
-    /// How fast the picture is moving, in MAP POINTS per second, and how much to
-    /// believe it. Set from the map, which is the only place that knows the scale
-    /// the motion was measured at — see `MotionEstimator`.
-    @Published public private(set) var motion: StormMotion?
-
-    /// How far ahead to extrapolate, and at what spacing.
-    ///
-    /// AN HOUR, IN THE SCAN'S OWN CADENCE. Five-minute steps because that is what
-    /// the observations are and a forecast that ran at a different rhythm would
-    /// visibly change speed at the seam. An hour because advection stops being a
-    /// forecast somewhere around there — see `Nowcast.swift`.
-    public var forecastHorizon: TimeInterval = 60 * 60
-    public var forecastStep: TimeInterval = 5 * 60
-
-    /// The last frame that is an OBSERVATION — the seam. Where the loop pauses,
-    /// where the timeline draws its line, and where a reload puts you back.
+    /// The newest scan's position — where the loop pauses and where a reload
+    /// puts you back.
     public var nowIndex: Int { max(0, frames.count - 1) }
 
-    public var current: LoopFrame? { loop.indices.contains(index) ? loop[index] : nil }
+    public var current: RadarFrame? { frames.indices.contains(index) ? frames[index] : nil }
 
-    /// The observation behind the frame on screen, which is a different question
-    /// once the loop has a future: a forecast frame's returns are the newest scan's.
-    public var currentObservation: RadarFrame? { frames.last }
-
-    /// Set when the tile service refuses a tile — throttling, or the mosaic
-    /// briefly unavailable. Kept separate from `failure`, which is about the
-    /// INDEX: the index can be perfect and every tile still be refused, and those
-    /// are different sentences.
+    /// Set when a tile could not be drawn because its scan would not download.
+    /// Kept separate from `failure`, which is about the LIST of scans: the list
+    /// can be fine and a scan still fail to arrive.
     @Published public private(set) var tilesRefused = false
 
     public func noteTilesRefused() { tilesRefused = true }
 
-    /// The index is refreshed on the scan cadence, not the alert cadence — and
-    /// the NEXRAD composite lands every five minutes, so this is one scan.
-    private let reloadEvery: Duration = .seconds(300)
+    /// Re-listed on roughly the volume cadence. A new volume lands every four
+    /// to ten minutes, so this never misses one by more than a couple.
+    private let reloadEvery: Duration = .seconds(120)
 
     public init() {}
 
@@ -144,14 +244,14 @@ public final class RadarModel: ObservableObject {
     // MARK: The two frames on screen
 
     /// The scan dissolving out, the scan dissolving in, and how far between them.
-    /// A paused or single-frame loop reports the same stamp twice, which is how
+    /// A paused or single-frame loop reports the same frame twice, which is how
     /// the renderer knows to draw a still rather than blend a frame with itself.
-    public var playhead: (a: LoopFrame?, b: LoopFrame?, blend: Double) {
-        guard loop.indices.contains(clock.index) else { return (nil, nil, 0) }
-        let a = loop[clock.index]
+    public var playhead: (a: RadarFrame?, b: RadarFrame?, blend: Double) {
+        guard frames.indices.contains(clock.index) else { return (nil, nil, 0) }
+        let a = frames[clock.index]
         guard isPlaying, clock.frameCount > 1,
-              loop.indices.contains(clock.nextIndex) else { return (a, a, 0) }
-        return (a, loop[clock.nextIndex], clock.blend)
+              frames.indices.contains(clock.nextIndex) else { return (a, a, 0) }
+        return (a, frames[clock.nextIndex], clock.blend)
     }
 
     /// Every stamp in the loop, oldest first — the timeline's own order.
@@ -160,22 +260,10 @@ public final class RadarModel: ObservableObject {
     /// The same stamps, IN THE ORDER THE LOOP WILL NEED THEM — what a prefetch
     /// should ask for.
     ///
-    /// `frames` sorts oldest-first because that is what a timeline is, and handing
-    /// that straight to the prefetch was a real and very visible bug: ten frames
-    /// of twenty tiles is two hundred requests, `URLSession` runs ten at a time,
-    /// so position in the list is close to arrival time. Oldest-first put the
-    /// NEWEST scan — the one the clock holds on and the only one anybody is
-    /// looking at — in the last twenty requests, about eight seconds out. The app
-    /// spent that whole time showing an empty map and calling it weather.
-    ///
-    /// Starting at the current index and wrapping is both the fix and exactly the
-    /// play order: the frame on screen, then the one it dissolves into, and so on
-    /// round the loop.
-    /// OBSERVATIONS ONLY, and the clamp is why this needs saying. The loop now
-    /// runs past the observations into a forecast, and a forecast frame draws the
-    /// NEWEST scan's tiles — so there is nothing extra to fetch for it, and a
-    /// playhead out in the future is, for fetching purposes, sitting on the last
-    /// observation.
+    /// Oldest-first put the NEWEST scan — the one the clock holds on and the only
+    /// one anybody is looking at — at the back of the queue. Starting at the
+    /// current index and wrapping is both the fix and exactly the play order: the
+    /// frame on screen, then the one it dissolves into, and so on round the loop.
     public var stampsByUrgency: [String] {
         guard !frames.isEmpty else { return [] }
         let start = min(clock.index, frames.count - 1)
@@ -185,21 +273,44 @@ public final class RadarModel: ObservableObject {
     // MARK: Loading
 
     public func load() async {
+        guard let site else { return }
         do {
-            let fetched = try await NEXRADClient().frames()
-            frames = fetched
-            // Hold the newest frame across a reload. Snapping back to the start of
-            // the loop every five minutes would yank the picture out from under
-            // someone watching a storm approach.
-            rebuildLoop(keepingEnd: true)
+            // The last ten volumes: roughly fifty minutes when it is raining
+            // (five-minute patterns) and longer in clear air.
+            let fetched = try await Level2Client().scans(site: site.id)
+                .suffix(10)
+                .map { RadarFrame(time: $0.time, key: $0.name) }
+            // A slow answer for a site the viewer has since switched away from
+            // must not overwrite the new site's loop.
+            guard self.site == site else { return }
+            archiveFrames = fetched
+            // Hold the newest frame across a reload (`rebuildLoop` keeps the
+            // end). Snapping back to the start of the loop every reload would
+            // yank the picture out from under someone watching a storm approach.
+            mergeFrames()
             failure = nil
             tilesRefused = false
+            await refreshCoverage()
+            await learnScanFacts()
         } catch {
-            failure = (error as? NEXRADClient.Failure)?.errorDescription ?? error.localizedDescription
+            guard self.site == site else { return }
+            failure = error.localizedDescription
         }
     }
 
-    /// Fetch the index, then keep it fresh.
+    /// Read coverage off the newest scan. The decode is shared with the tiles
+    /// through `Level2Frames`, so this costs nothing the map was not already
+    /// going to pay.
+    private func refreshCoverage() async {
+        guard let site, let stamp = frames.last?.key else { coverage = nil; return }
+        guard let frame = await Level2Frames.shared.frame(for: stamp),
+              self.site == site else { return }
+        let found = RadarCoverage(site: site.id, latitude: frame.latitude,
+                                  longitude: frame.longitude, sweep: frame.sweep)
+        if found != coverage { coverage = found }
+    }
+
+    /// Fetch the list, then keep it fresh.
     ///
     /// `driving` is whether the model should also run the animation itself. The
     /// Mac says NO and ticks the clock from a display link instead, because a
@@ -211,7 +322,13 @@ public final class RadarModel: ObservableObject {
         await withTaskGroup(of: Void.self) { group in
             group.addTask { @MainActor [weak self] in
                 while !Task.isCancelled {
-                    try? await Task.sleep(for: self?.reloadEvery ?? .seconds(300))
+                    await self?.pollLive()
+                    try? await Task.sleep(for: self?.liveEvery ?? .seconds(10))
+                }
+            }
+            group.addTask { @MainActor [weak self] in
+                while !Task.isCancelled {
+                    try? await Task.sleep(for: self?.reloadEvery ?? .seconds(120))
                     await self?.load()
                 }
             }
@@ -237,173 +354,27 @@ public final class RadarModel: ObservableObject {
     /// display link so the dissolve is sampled on the refreshes it will be shown
     /// on, rather than on a timer that drifts against them.
     public func tick(delta: Double) {
+        if mode == .sweep { advanceSweep(by: delta); return }
         guard isPlaying else { return }
         withClock { $0.advance(by: delta) }
     }
 
-    /// Seeds the loop without the network, for tests about ORDER and timing —
-    /// the parts that have nothing to do with whether IEM answered.
+    /// Seeds the loop without the network, for tests about ORDER and timing.
     func setFramesForTesting(_ incoming: [RadarFrame]) {
         frames = incoming
         rebuildLoop(keepingEnd: true)
     }
 
-    /// Seeds a motion without a map, for tests about the SHAPE of the loop.
-    func setMotionForTesting(_ new: StormMotion?) {
-        motion = new
-        rebuildLoop(keepingEnd: false)
-    }
-
     public func scrub(to newIndex: Int) {
-        guard loop.indices.contains(newIndex) else { return }
+        guard frames.indices.contains(newIndex) else { return }
         isPlaying = false
         withClock { $0.jump(to: newIndex) }
     }
 
-    // MARK: The future
-
-    /// Hand the loop a storm motion, in map points per second.
-    ///
-    /// MEASURED ON THE MAP, APPLIED HERE. The estimator works in grid cells
-    /// because that is what it can correlate; only the map knows how big a cell
-    /// is. Keeping the conversion at the boundary means this model never has to
-    /// know a viewport exists.
-    public func setMotion(_ new: StormMotion?) {
-        let usable = (new?.isUsable ?? false) ? new : nil
-        // Compared loosely: the estimate jitters by a fraction of a cell between
-        // scans, and rebuilding the loop — which resizes the clock — for a change
-        // nobody can see would make the strip twitch every few seconds.
-        if let a = motion, let b = usable,
-           abs(a.dx - b.dx) < 1e-4, abs(a.dy - b.dy) < 1e-4 { return }
-        if motion == nil, usable == nil { return }
-        motion = usable
-        rebuildLoop(keepingEnd: false)
-    }
-
-    /// Observations, then the extrapolation, as one walk.
     private func rebuildLoop(keepingEnd: Bool) {
-        var built = frames.map { LoopFrame(time: $0.time, stamp: $0.stamp) }
-
-        if let motion, let newest = frames.last {
-            var lead = forecastStep
-            while lead <= forecastHorizon {
-                built.append(LoopFrame(time: newest.time.addingTimeInterval(lead),
-                                       stamp: newest.stamp,
-                                       offsetX: motion.dx * lead,
-                                       offsetY: motion.dy * lead,
-                                       lead: lead))
-                lead += forecastStep
-            }
-        }
-        loop = built
-
         withClock {
-            // The pause belongs on the newest OBSERVATION, not on the last frame —
-            // which is now an hour of extrapolation. Handed to `resize` rather
-            // than set after it, because the resize needs both the old seam and
-            // the new one to put the playhead back where the viewer was.
-            $0.resize(to: built.count, keepingEnd: keepingEnd, holdIndex: nowIndex)
-            $0.frameHold = FieldLoopClock.hold(forFrames: built.count)
+            $0.resize(to: frames.count, keepingEnd: keepingEnd, holdIndex: nowIndex)
+            $0.frameHold = FieldLoopClock.hold(forFrames: frames.count)
         }
-    }
-}
-
-/// The tile layer for MapKit's own tile machinery.
-///
-/// STILL HERE FOR THE TV, and nothing else. The Mac draws its fields through
-/// `FieldRenderer`, which holds decoded pixels and can therefore dissolve; this
-/// hands PNG bytes to MapKit, which cannot. See the header for why both exist.
-public final class RadarTileOverlay: MKTileOverlay {
-    /// How intensity becomes opacity. Static because the tile cache is static —
-    /// changing it has to clear the cache, which `setCurve` does.
-    public private(set) static var curve: RadarTileShading.Curve = .standard
-
-    public static func setCurve(_ new: RadarTileShading.Curve) {
-        guard new != curve else { return }
-        curve = new
-        store.removeAllObjects()
-    }
-
-    public let frame: RadarFrame
-
-    /// Called on the main actor when the tile service refuses a tile.
-    public var onTilesRefused: (@Sendable () -> Void)?
-
-    public init(frame: RadarFrame) {
-        self.frame = frame
-        super.init(urlTemplate: nil)
-        canReplaceMapContent = false
-        tileSize = CGSize(width: Radar.tileSize, height: Radar.tileSize)
-        // NO minimumZ/maximumZ. An earlier guess of 3…10 was wrong in the way
-        // guesses about someone else's service usually are: MapKit renders
-        // "Zoom level not supported" for any zoom outside the declared range, so
-        // the constraint didn't clamp the view, it blanked it. Behind a WMS the
-        // question doesn't even arise — it renders whatever bounding box you name
-        // at whatever size you ask for. (`FieldTileSource.zoomRange` CAN clamp,
-        // because the field renderer scales the nearest level instead of
-        // blanking.)
-    }
-
-    public override func url(forTilePath path: MKTileOverlayPath) -> URL {
-        Radar.tileURL(frame: frame, z: path.z, x: path.x, y: path.y)
-            ?? URL(string: "about:blank")!
-    }
-
-    /// AN HTTP ERROR IS NOT A TILE, and the default `loadTile` cannot tell the
-    /// difference. An error body served as a normal response gets accepted by
-    /// MapKit, fails to decode as an image, and comes out as its own grey "Zoom
-    /// level not supported" square — a message about zoom for a problem that has
-    /// nothing to do with zoom. Turning a non-2xx into an actual error makes
-    /// MapKit draw nothing and lets the card say what really happened.
-    private static let session: URLSession = {
-        let config = URLSessionConfiguration.default
-        config.urlCache = URLCache(memoryCapacity: 32 * 1024 * 1024,
-                                   diskCapacity: 256 * 1024 * 1024,
-                                   diskPath: "radar-tiles")
-        config.requestCachePolicy = .returnCacheDataElseLoad
-        config.httpMaximumConnectionsPerHost = 10
-        return URLSession(configuration: config)
-    }()
-
-    /// Shaded tiles, held outright rather than left to `URLCache`. The WMS sends
-    /// no caching headers at all, so whether a header-less response survives is a
-    /// policy question with a subtle answer, and the blank frames come back if
-    /// the answer is ever no.
-    private static let store: NSCache<NSURL, NSData> = {
-        let cache = NSCache<NSURL, NSData>()
-        cache.totalCostLimit = 64 * 1024 * 1024
-        return cache
-    }()
-
-    public override func loadTile(at path: MKTileOverlayPath,
-                                  result: @escaping (Data?, Error?) -> Void) {
-        let url = url(forTilePath: path)
-
-        if let warm = Self.store.object(forKey: url as NSURL) {
-            result(warm as Data, nil)
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.timeoutInterval = 20
-        let notify = onTilesRefused
-        Self.session.dataTask(with: request) { data, response, error in
-            let status = (response as? HTTPURLResponse)?.statusCode ?? 0
-            guard (200..<300).contains(status) else {
-                // Only when the SERVICE answered. A status of 0 is a transport
-                // failure — offline, timed out — and saying "the service refused
-                // tiles" about a dropped Wi-Fi connection blames the wrong thing.
-                if status > 0 { notify?() }
-                result(nil, error ?? URLError(.badServerResponse))
-                return
-            }
-            // Shaded BEFORE caching, so a tile is processed once however many
-            // frames and pans ask for it. `shade` returning nil means the bytes
-            // wouldn't decode, and the original is used — a tile drawn the old
-            // way beats a hole in the map.
-            let shaded = data.flatMap { RadarTileShading.shade($0, curve: Self.curve) } ?? data
-            if let shaded { Self.store.setObject(shaded as NSData, forKey: url as NSURL, cost: shaded.count) }
-            result(shaded, error)
-        }.resume()
     }
 }

@@ -92,26 +92,45 @@ final class FieldRenderer: MKOverlayRenderer {
         var blend: Double = 0
         /// The layer's own opacity, from the layer list.
         var opacity: Double = 1
-        /// WHERE TO DRAW EACH SCAN, in map points. This is the entire cost of
-        /// having a forecast: an extrapolated frame is a scan already in the store
-        /// drawn somewhere it is not yet. Zero for every observation, so a loop
-        /// without a nowcast behaves exactly as it did.
-        var offsetA: CGPoint = .zero
-        var offsetB: CGPoint = .zero
+        /// SWEEP MODE. The site and where the line points; nil in the loop.
+        var sweep: SweepSite?
+        var beamAzimuth: Double = 0
+        /// A scan being swept in: `stampB` inside the wedge the line has passed
+        /// since `revealFrom`, `stampA` outside it. Nil between reveals.
+        var reveal: Reveal?
     }
 
-    /// What one slot is drawing: a scan and where to put it.
-    private struct Frame: Equatable {
-        var stamp: String = ""
-        var offset: CGPoint = .zero
+    /// The wedge a scan has been swept into so far.
+    struct Reveal: Equatable {
+        /// The scan's real first-radial azimuth, where its wedge begins.
+        var from: Double
+        /// Degrees turned clockwise since, 0...360.
+        var turned: Double
+    }
+
+    /// Which side of a wedge a slot draws. Map points, so the clip is the same
+    /// shape at every zoom.
+    enum Clip: Equatable {
+        case inside([MKMapPoint])
+        case outside([MKMapPoint])
+
+        static func == (a: Clip, b: Clip) -> Bool {
+            switch (a, b) {
+            case let (.inside(x), .inside(y)), let (.outside(x), .outside(y)):
+                return x.count == y.count && zip(x, y).allSatisfy { $0.x == $1.x && $0.y == $1.y }
+            default: return false
+            }
+        }
     }
 
     let source: FieldTileSource
     private let store: FieldTileStore
 
     private let lock = NSLock()
-    /// The one frame this renderer draws. An empty stamp means draw nothing.
-    private var frame = Frame()
+    /// The one scan this renderer draws. Empty means draw nothing.
+    private var stamp = ""
+    /// Nil draws everywhere; set only while a sweep replay is running.
+    private var clip: Clip?
 
     /// Backing scale of the screen the map is on. Set by the canvas; it buys one
     /// zoom level, which is the difference between a crisp field and a soft one
@@ -154,44 +173,47 @@ final class FieldRenderer: MKOverlayRenderer {
 
     // MARK: Driving it
 
-    /// Point this renderer at a scan, drawn at an offset. Returns true when it
-    /// actually moved, so the caller can decide whether a repaint is owed — which
-    /// for a loop is about twice a second, not sixty times.
+    /// Point this renderer at a scan. Returns true when it actually moved, so the
+    /// caller can decide whether a repaint is owed — which for a loop is about
+    /// twice a second, not sixty times.
     @discardableResult
-    func set(stamp: String, offset: CGPoint = .zero) -> Bool {
-        let new = Frame(stamp: stamp, offset: offset)
+    func set(stamp: String) -> Bool {
         lock.lock()
-        let changed = frame != new
-        if changed { frame = new }
+        let changed = self.stamp != stamp
+        if changed { self.stamp = stamp }
         lock.unlock()
         return changed
     }
 
-    private var currentFrame: Frame {
+    /// Set the wedge this slot is confined to. The caller invalidates exactly the
+    /// region that changed — redrawing the whole viewport every refresh is what
+    /// this renderer's history warns against.
+    func set(clip: Clip?) {
+        lock.lock(); self.clip = clip; lock.unlock()
+    }
+
+    private var currentClip: Clip? {
         lock.lock(); defer { lock.unlock() }
-        return frame
+        return clip
+    }
+
+    private var currentStamp: String {
+        lock.lock(); defer { lock.unlock() }
+        return stamp
     }
 
     // MARK: Drawing
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
-        let frame = currentFrame
-        guard !frame.stamp.isEmpty else { return }
+        let stamp = currentStamp
+        guard !stamp.isEmpty else { return }
 
         let z = FieldTileGrid.zoom(forZoomScale: Double(zoomScale),
                                    tileSize: source.tileSize,
-                                   scale: tileScale,
+                                   scale: min(tileScale, source.maxPixelScale ?? tileScale),
                                    clampedTo: source.zoomRange)
 
-        // THE TILES ARE ASKED FOR WHERE THE WEATHER CAME FROM, and drawn where it
-        // is going. An extrapolated frame shifts the picture by `offset`, so the
-        // square of map this rect will end up showing is the rect shifted BACK by
-        // the same amount. Getting that sign wrong does not fail — it draws
-        // yesterday's storms on the wrong county, which is the one failure this
-        // whole file exists to avoid.
-        let sourceX = mapRect.origin.x - Double(frame.offset.x)
-        let sourceY = mapRect.origin.y - Double(frame.offset.y)
-        let placements = FieldTileGrid.placements(inRectX: sourceX, y: sourceY,
+        let placements = FieldTileGrid.placements(inRectX: mapRect.origin.x, y: mapRect.origin.y,
                                                   width: mapRect.size.width,
                                                   height: mapRect.size.height,
                                                   z: z)
@@ -199,39 +221,49 @@ final class FieldRenderer: MKOverlayRenderer {
 
         // Tell whoever is prefetching what this viewport needs. Cheap, and it is
         // the only place in the app that knows.
-        //
-        // ONLY FROM AN UNSHIFTED FRAME, though. A forecast frame's placements are
-        // upwind ground, not the viewport, and folding those into the reported set
-        // would quietly redefine "what is on screen" — every one of them would
-        // then be prefetched for all ten scans and counted in the loading bar's
-        // denominator, for a picture only the newest scan will ever be drawn from.
-        // The margin the forecast does need is asked for explicitly; see
-        // `MapSurfaceView.upwindTiles`.
-        if frame.offset == .zero {
-            var seen = Set<FieldTileGrid.Tile>()
-            let distinct = placements.compactMap { seen.insert($0.tile).inserted ? $0.tile : nil }
-            onVisibleTiles?(distinct, z)
-        }
+        var seen = Set<FieldTileGrid.Tile>()
+        let distinct = placements.compactMap { seen.insert($0.tile).inserted ? $0.tile : nil }
+        onVisibleTiles?(distinct, z)
 
         // NO PER-PIXEL ALPHA HERE. The crossfade is the renderer's `alpha`, which
         // MapKit applies when it composites this overlay over the map — so a frame
         // is rasterised once and then faded for free, rather than re-blended on
         // every refresh.
+        // THE REPLAY'S WEDGE. The new scan inside the line's path, the old one
+        // outside it — the same two slots the dissolve uses, clipped instead of
+        // faded.
+        if let clip = currentClip {
+            let points: [MKMapPoint]
+            switch clip { case .inside(let p), .outside(let p): points = p }
+            guard points.count > 2 else {
+                // An empty wedge: the inside draws nothing, the outside everything.
+                if case .inside = clip { return }
+                for placement in placements { paint(placement, stamp: stamp, in: context) }
+                return
+            }
+            let path = CGMutablePath()
+            path.addLines(between: points.map { point(for: $0) })
+            path.closeSubpath()
+            if case .outside = clip { path.addRect(rect(for: mapRect).insetBy(dx: -4, dy: -4)) }
+            context.addPath(path)
+            context.clip(using: .evenOdd)
+        }
+
         for placement in placements {
-            paint(placement, stamp: frame.stamp, offset: frame.offset, in: context)
+            paint(placement, stamp: stamp, in: context)
         }
     }
 
     /// One tile of one frame. Falls back to a parent when the exact tile is not
     /// held yet, and asks for the exact one either way.
     private func paint(_ placement: FieldTileGrid.Placement, stamp: String,
-                       offset: CGPoint, in context: CGContext) {
+                       in context: CGContext) {
         let tile = placement.tile
         let key = FieldTileStore.Key(source: source.id, stamp: stamp,
                                      z: tile.z, x: tile.x, y: tile.y)
 
         if let image = store.image(for: key) {
-            drawImage(image, in: tileRect(placement, offset: offset), context: context)
+            drawImage(image, in: tileRect(placement), context: context)
             return
         }
 
@@ -258,22 +290,22 @@ final class FieldRenderer: MKOverlayRenderer {
             // arithmetic done twice, once in pixels and once in map points, with
             // two chances to round it differently.
             let span = FieldTileGrid.tileSpan(z: parent.z)
-            let parentOrigin = (x: floor(placement.mapX / span) * span + Double(offset.x),
-                                y: floor(placement.mapY / span) * span + Double(offset.y))
+            let parentOrigin = (x: floor(placement.mapX / span) * span,
+                                y: floor(placement.mapY / span) * span)
             let parentRect = rect(for: MKMapRect(x: parentOrigin.x, y: parentOrigin.y,
                                                  width: span, height: span))
             context.saveGState()
-            context.clip(to: tileRect(placement, offset: offset))
+            context.clip(to: tileRect(placement))
             drawImage(image, in: parentRect, context: context)
             context.restoreGState()
             return
         }
     }
 
-    private func tileRect(_ placement: FieldTileGrid.Placement, offset: CGPoint) -> CGRect {
+    private func tileRect(_ placement: FieldTileGrid.Placement) -> CGRect {
         let span = FieldTileGrid.tileSpan(z: placement.tile.z)
-        return rect(for: MKMapRect(x: placement.mapX + Double(offset.x),
-                                   y: placement.mapY + Double(offset.y),
+        return rect(for: MKMapRect(x: placement.mapX,
+                                   y: placement.mapY,
                                    width: span, height: span))
     }
 
@@ -310,12 +342,9 @@ final class FieldRenderer: MKOverlayRenderer {
     /// per renderer during exactly the seconds the loop was trying to start
     /// moving.
     private func invalidate(_ key: FieldTileStore.Key) {
-        let frame = currentFrame
-        guard key.stamp == frame.stamp else { return }
+        guard key.stamp == currentStamp else { return }
         let span = FieldTileGrid.tileSpan(z: key.z)
         let origin = FieldTileGrid.origin(of: .init(z: key.z, x: key.x, y: key.y))
-        setNeedsDisplay(MKMapRect(x: origin.x + Double(frame.offset.x),
-                                  y: origin.y + Double(frame.offset.y),
-                                  width: span, height: span))
+        setNeedsDisplay(MKMapRect(x: origin.x, y: origin.y, width: span, height: span))
     }
 }

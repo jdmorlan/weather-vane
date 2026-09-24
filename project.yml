@@ -125,6 +125,10 @@ targets:
     templates: [Stamped]
     sources:
       - VaneTV
+      # The Mac's field renderer, shared rather than copied: the TV's radar
+      # draws through the same two-slot dissolve. It has no platform code.
+      - Weather/Views/FieldRenderer.swift
+      - Weather/Views/SweepTrail.swift
     dependencies:
       - package: WeatherKit
     settings:

@@ -60,8 +60,7 @@ struct CardDetail: View {
         if let home {
             ZStack {
                 TVRadarMap(center: home, radiusMeters: range.radius,
-                           frames: radar.frames, index: radar.index,
-                           hazards: hazards.drawable)
+                           radar: radar, hazards: hazards.drawable, coverage: radar.coverage)
                     .ignoresSafeArea()
                     .focusable(false)
                 Circle().stroke(.white, lineWidth: 5).frame(width: 34, height: 34)
@@ -93,7 +92,11 @@ struct CardDetail: View {
                 // stays as the smaller half, for anyone checking it against
                 // another source.
                 VStack(alignment: .leading, spacing: 0) {
-                    Text(RadarAge.describe(current.time))
+                    // Scans still arriving is said, not left as a loop that
+                    // mysteriously will not move.
+                    Text(radar.scansReady < radar.frames.count
+                         ? "Loading scans · \(radar.scansReady) of \(radar.frames.count)"
+                         : RadarAge.describe(current.time))
                         .font(.system(size: 28, weight: .medium))
                     Text(current.time, format: .dateTime.hour().minute())
                         .font(.system(size: 19).monospacedDigit())

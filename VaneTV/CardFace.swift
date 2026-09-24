@@ -51,8 +51,7 @@ struct CardFace: View {
         ZStack(alignment: .topLeading) {
             if let home {
                 TVRadarMap(center: home, radiusMeters: range.radius,
-                           frames: radar.frames, index: radar.index,
-                           hazards: hazards.drawable)
+                           radar: radar, hazards: hazards.drawable)
                     .allowsHitTesting(false)
                 // The camera is fixed, so home is the exact centre of the face.
                 Circle().stroke(.white, lineWidth: 3)

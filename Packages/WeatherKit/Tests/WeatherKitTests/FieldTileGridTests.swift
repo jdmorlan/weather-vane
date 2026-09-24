@@ -129,8 +129,8 @@ final class FieldTileGridTests: XCTestCase {
     // MARK: Agreement with the WMS bounding box
 
     /// THE TWO HALVES OF THE SAME ADDRESS MUST AGREE. `FieldTileGrid` decides
-    /// WHERE a tile is drawn, in MapKit's map space; `Radar.tileBBox` decides
-    /// WHAT the service renders, in EPSG:3857 metres. They are separate pieces of
+    /// WHERE a tile is drawn, in MapKit's map space; `bbox3857` decides
+    /// WHAT a WMS renders, in EPSG:3857 metres. They are separate pieces of
     /// arithmetic over the same slippy-tile scheme, and if they ever disagree the
     /// picture is drawn accurately in the wrong place. Both are linear in the
     /// tile index over their own world size, so the fractional position of a
@@ -142,8 +142,8 @@ final class FieldTileGridTests: XCTestCase {
             // Map space counts y DOWNWARD from the north edge.
             let fractionY = origin.y / FieldTileGrid.worldSize
 
-            let parts = Radar.tileBBox(z: z, x: x, y: y).split(separator: ",").map { Double($0)! }
-            let extent = Radar.mercatorExtent
+            let parts = FieldTileGrid.bbox3857(z: z, x: x, y: y).split(separator: ",").map { Double($0)! }
+            let extent = FieldTileGrid.mercatorExtent
             let bboxFractionX = (parts[0] + extent) / (2 * extent)
             let bboxFractionY = (extent - parts[3]) / (2 * extent)
 
@@ -196,25 +196,18 @@ final class FieldTileGridTests: XCTestCase {
                        [FieldTileGrid.Tile(z: 3, x: 1, y: 3)])
     }
 
-    /// THE RADAR CEILING, STATED AS THE THING THAT ACTUALLY MATTERS. Pinning the
-    /// number would just restate the source; what has to stay true is the
-    /// RELATIONSHIP between the finest tile we fetch and the roughly 1 km cell the
-    /// NEXRAD composite is made of.
-    ///
-    /// Below about two pixels per cell the service starts averaging real cells
-    /// together and the picture genuinely loses detail. Above about eight, every
-    /// further level quadruples the request count to draw the same observation
-    /// larger — which is exactly the seventeen-second load this ceiling was
-    /// lowered to fix.
-    func testTheRadarCeilingResolvesTheCompositeWithoutOversamplingIt() {
-        let source = RadarFieldSource()
+    /// THE RADAR CEILING, STATED AS THE THING THAT ACTUALLY MATTERS: the
+    /// relationship between the finest tile drawn and the 250 m gate a Level II
+    /// sweep is made of. A few pixels per gate so the interpolation reads
+    /// smooth; not so many that each level quadruples the tiles to draw the
+    /// same measurement larger.
+    func testTheRadarCeilingResolvesAGateWithoutOversamplingIt() {
+        let source = Level2FieldSource(site: "KFWS")
         let metresPerPixel = 40_075_017.0
             / (pow(2, Double(source.zoomRange.upperBound)) * Double(source.tileSize))
-        let pixelsPerCell = 1_000.0 / metresPerPixel
+        let pixelsPerGate = 250.0 / metresPerPixel
 
-        XCTAssertGreaterThan(pixelsPerCell, 2,
-                             "the finest tile can no longer resolve a 1 km cell")
-        XCTAssertLessThan(pixelsPerCell, 8,
-                          "fetching four times the tiles to upscale the same observation")
+        XCTAssertGreaterThan(pixelsPerGate, 2, "the finest tile can no longer resolve a gate")
+        XCTAssertLessThan(pixelsPerGate, 16, "drawing four times the tiles to upscale the same gate")
     }
 }
