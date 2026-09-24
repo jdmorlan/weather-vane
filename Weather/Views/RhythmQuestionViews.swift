@@ -296,48 +296,120 @@ struct RhythmQuestionsView: View {
     /// year is doing about it.
     var forecast: [SeasonForecastDay] = []
 
-    @State private var questions: [RhythmQuestion] = []
+    /// Nil until the first build lands — NOT empty. The difference is what lets
+    /// a card say "working it out" rather than "can't be answered".
+    @State private var questions: [RhythmQuestion]?
     @State private var nearTerm: [SeasonTrack] = []
     @State private var frostFree: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            ForEach(questions) { question in
-                RhythmQuestionCard(question: question, today: today,
-                                   nearTerm: nearTerm,
-                                   footnote: question.measure == .freeze ? frostFree : nil)
-                    .padding(26)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
-                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.07)))
+            // EVERY QUESTION HOLDS ITS PLACE, answered or not. This used to list
+            // only what had been built, so while the build ran — or for a question
+            // the record can't answer — the page was simply shorter, and a missing
+            // card looks exactly like a card that was never meant to be there.
+            ForEach(RhythmQuestionKind.catalogue) { kind in
+                Group {
+                    if let question = questions?.first(where: { $0.id == kind.id }) {
+                        RhythmQuestionCard(question: question, today: today,
+                                           nearTerm: nearTerm,
+                                           footnote: question.measure == .freeze ? frostFree : nil)
+                    } else {
+                        RhythmQuestionPlaceholder(kind: kind, isBuilding: questions == nil)
+                    }
+                }
+                .padding(26)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
+                .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.07)))
             }
         }
-        // One build for the whole page. Both halves scan the archive — the
-        // questions for every crossing in both directions, the near-term tracks
-        // for what the forecast is doing to the next one — and doing them per
-        // card would be seven scans for one screen.
-        .task(id: rebuildKey) {
+        // TWO BUILDS, KEYED ON WHAT EACH ACTUALLY READS. This was one build keyed
+        // on today plus the forecast, which meant two things went wrong: every
+        // forecast refresh restarted the whole seconds-long archive scan for the
+        // answers, which don't read the forecast at all; and a nightly archive
+        // top-up never rebuilt them, because the archive wasn't in the key.
+        .task(id: archiveKey) {
             let climate = self.climate
-            let day = self.today
-            let outlook = self.forecast
-            let built = await Task.detached { () -> ([RhythmQuestion], [SeasonTrack], String?) in
+            let built = await Task.detached(priority: .userInitiated) { () -> ([RhythmQuestion], String?) in
                 let questions = climate.rhythmQuestions()
-                let tracks = climate.seasonalTracks(asOf: day, horizonDays: 75, forecast: outlook)
                 let measured = climate.growingSeasons().compactMap(\.days).sorted()
                 var line: String?
                 if measured.count >= 2, let shortest = measured.first, let longest = measured.last {
                     line = "Between the two, the frost-free season runs \(measured[measured.count / 2]) days here — \(shortest) to \(longest) across \(measured.count) years."
                 }
-                return (questions, tracks, line)
+                return (questions, line)
             }.value
+            guard !Task.isCancelled else { return }
             questions = built.0
-            nearTerm = built.1
-            frostFree = built.2
+            frostFree = built.1
+        }
+        .task(id: nearTermKey) {
+            let climate = self.climate
+            let day = self.today
+            let outlook = self.forecast
+            let tracks = await Task.detached(priority: .utility) {
+                climate.seasonalTracks(asOf: day, horizonDays: 75, forecast: outlook)
+            }.value
+            guard !Task.isCancelled else { return }
+            nearTerm = tracks
         }
     }
 
-    private var rebuildKey: String {
-        today + forecast.map { "\($0.day):\($0.tempMin ?? -999):\($0.tempMax ?? -999)" }
+    /// Changes when the archive gains a day or the last one is revised — which
+    /// is when the answers can change.
+    private var archiveKey: String {
+        "\(climate.all.count)|\(climate.all.last?.day ?? "")"
+    }
+
+    private var nearTermKey: String {
+        archiveKey + "|" + today + forecast.map { "\($0.day):\($0.tempMin ?? -999):\($0.tempMax ?? -999)" }
             .joined(separator: "|")
+    }
+}
+
+/// A question's place on the page before — or without — its answer.
+///
+/// The heading and the definition are printed either way: they are known before
+/// any archive is read, and they are what tells you which card this is.
+struct RhythmQuestionPlaceholder: View {
+    let kind: RhythmQuestionKind
+    /// Still being worked out, as opposed to worked out and unanswerable.
+    let isBuilding: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            HStack(spacing: 9) {
+                Image(systemName: kind.symbol)
+                    .font(.title3).foregroundStyle(QuestionYearStrip.color(kind.measure).opacity(0.5))
+                Text(kind.question)
+                    .font(.title2.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if isBuilding {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Working it out from the years behind you…")
+                        .font(.title3).foregroundStyle(.secondary)
+                }
+                // The strip's footprint, held empty, so the page doesn't jump
+                // when the answers land.
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(Color.primary.opacity(0.05))
+                    .frame(height: 34 + 8 + 3 + 3 + 15)
+            } else {
+                Label("The years on file don't cross this line clearly enough to put a date on it yet. The answer appears here once they do.",
+                      systemImage: "hourglass")
+                    .font(.body).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: RhythmQuestionCard.proseWidth, alignment: .leading)
+            }
+
+            Text(kind.basis)
+                .font(.footnote).foregroundStyle(.tertiary)
+                .fixedSize(horizontal: false, vertical: true)
+                .frame(maxWidth: RhythmQuestionCard.proseWidth, alignment: .leading)
+        }
     }
 }

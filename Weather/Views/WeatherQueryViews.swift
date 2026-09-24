@@ -2001,9 +2001,24 @@ struct SeasonalCurve: View {
     var opens: OccurrenceSpread?
     var closes: OccurrenceSpread?
 
-    @State private var lit: String?
+    /// What the pointer has hold of: the edge group, and the single year inside
+    /// it when the pointer is near enough to name one.
+    ///
+    /// ONE STATE RATHER THAN TWO, and not only for tidiness. `PointReadout`
+    /// selects by a single `Equatable` value — it has to, because on a finger
+    /// "tap the thing that is already lit to put it out" is a comparison — and
+    /// two independent `@State`s have no value to compare. They were never
+    /// really independent anyway: `litYear` is meaningless without `lit`.
+    private struct EdgeHit: Equatable {
+        var group: String
+        var year: Int?
+    }
+
+    @State private var hit: EdgeHit?
+
+    private var lit: String? { hit?.group }
     /// The single year under the pointer, when it's near enough to name one.
-    @State private var litYear: Int?
+    private var litYear: Int? { hit?.year }
 
     /// The dates actually drawn.
     ///
@@ -2079,19 +2094,12 @@ struct SeasonalCurve: View {
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .contentShape(Rectangle())
-                .onContinuousHover { phase in
-                    switch phase {
-                    case .active(let point):
-                        let group = nearest(to: point.x, geo.size.width)
-                        lit = group
-                        litYear = group
-                            .flatMap { id in edges.first { $0.id == id } }
-                            .flatMap { nearestYear($0, to: point.x, geo.size.width) }
-                    case .ended:
-                        lit = nil
-                        litYear = nil
-                    }
+                // Hover on a pointer, tap on a finger. See `PointReadout`.
+                .pointReadout($hit) { point in
+                    guard let group = nearest(to: point.x, geo.size.width) else { return nil }
+                    return EdgeHit(group: group,
+                                   year: edges.first { $0.id == group }
+                                       .flatMap { nearestYear($0, to: point.x, geo.size.width) })
                 }
             }
         }
@@ -2573,12 +2581,8 @@ struct QueryCalendar: View {
         let index = byMonthDay
         Canvas { context, size in draw(context, size, index) }
             .frame(height: Self.rowHeight * 12 + Self.headerHeight)
-            .onContinuousHover { phase in
-                switch phase {
-                case .active(let point): hovered = cell(at: point, index: index)
-                case .ended: hovered = nil
-                }
-            }
+            // Hover on a pointer, tap on a finger. See `PointReadout`.
+            .pointReadout($hovered) { point in cell(at: point, index: index) }
             // Over the grid, at the square you're pointing at — not a line of prose forty points below,
             // which is where this readout used to live and where nobody was looking.
             .overlay(alignment: .topLeading) {

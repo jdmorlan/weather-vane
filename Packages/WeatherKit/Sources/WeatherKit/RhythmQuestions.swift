@@ -78,19 +78,27 @@ public struct RhythmQuestion: Identifiable, Equatable, Sendable {
 /// A table rather than a `switch` scattered through the views, because the
 /// wording IS the feature here and it should be readable in one place — and
 /// because the order of this array is the order of the page.
-struct RhythmQuestionKind {
-    var measure: SeasonTrack.Measure
-    var direction: YearMilestone.Direction
+///
+/// PUBLIC SO THE PAGE CAN HOLD A PLACE FOR EVERY QUESTION, answered or not. A
+/// question the record can't answer yet — or one still being worked out — used
+/// to be simply absent, and an absence is invisible: nobody can tell a page of
+/// five questions from a page of seven that lost two.
+public struct RhythmQuestionKind: Identifiable, Sendable {
+    public var measure: SeasonTrack.Measure
+    public var direction: YearMilestone.Direction
     /// The threshold that gets to be the answer. The others support it.
-    var threshold: Double
-    var question: String
-    var basis: String
-    var symbol: String
+    public var threshold: Double
+    public var question: String
+    public var basis: String
+    public var symbol: String
+
+    /// The same identity as the `RhythmQuestion` it answers to.
+    public var id: String { "\(measure.rawValue)·\(direction.rawValue)" }
 
     /// Ordered as the page reads. Heat first, and its ENDING before its
     /// beginning, because "when does it stop" is the question this page was
     /// asked for — standing in a hot September wanting to know when it lets go.
-    static let catalogue: [RhythmQuestionKind] = [
+    public static let catalogue: [RhythmQuestionKind] = [
         .init(measure: .afternoons, direction: .easing, threshold: 90,
               question: "When does it stop being hot?",
               basis: "Hot means a week of afternoons averaging 90° or more. This is the date that week-long average finally drops below it.",

@@ -61,6 +61,15 @@ final class WeatherArchiveModel: ObservableObject {
         reload()
     }
 
+    /// Wait for a catch-up that is already running, if one is.
+    ///
+    /// EXISTS FOR THE SAMPLE ARCHIVE, which can only ask for the minutes behind
+    /// days this archive already holds. Returns at once when nothing is running,
+    /// which is the every-launch case on a warm machine.
+    func waitForCatchUp() async {
+        await task?.value
+    }
+
     /// Bring the archive up to yesterday. Safe to call on every launch: an
     /// already-current archive does nothing, and a laptop closed for a week just
     /// does a slightly bigger catch-up.

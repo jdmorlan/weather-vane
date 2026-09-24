@@ -95,10 +95,28 @@ final class StationModels: ObservableObject {
     /// alongside the live fetch rather than gating it: the forecast is what you
     /// opened this app for, and the archive filling in behind it is background
     /// work. Both models ignore a call while one is already running.
+    ///
+    /// THE SAMPLES GO SECOND, AND THEY HAVE TO WAIT. These two used to be fired
+    /// side by side, which reads as harmless — two independent fetches — and is
+    /// not, because they are not independent. `fillMatchingDailyArchive` asks the
+    /// DAILY archive which days exist and fetches the minutes behind exactly
+    /// those; started in the same breath as the daily catch-up it read a store
+    /// with nothing in it yet, fetched nothing, folded nothing, and handed Wind a
+    /// climatology of zero days. Wind then said "No wind history yet", which is a
+    /// sentence about the station and was really a sentence about the ordering.
+    ///
+    /// Invisible on a Mac that has been running for months, because there the
+    /// daily archive is already full before the app opens and the empty read
+    /// never happens. It is the FIRST DAY on a new device that has nothing on
+    /// disk — a fresh iPad — and on that device it never came right on its own:
+    /// the fold had already run and left a non-nil, empty climate behind it.
     func catchUpArchives(settings: AppSettings) {
         archive.catchUp(token: settings.tempestToken, stationID: settings.tempestStationID)
-        samples.catchUp(token: settings.tempestToken, stationID: settings.tempestStationID,
-                        daily: archive.store)
+        Task {
+            await archive.waitForCatchUp()
+            samples.catchUp(token: settings.tempestToken, stationID: settings.tempestStationID,
+                            daily: archive.store)
+        }
     }
 
     /// The cold start, run once from the root and never from a destination.

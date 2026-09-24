@@ -171,15 +171,10 @@ struct HourlyRibbon: View {
                               y: lanes.band + 6 + lanes.icon / 2)
             }
         }
-        .contentShape(Rectangle())
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let p):
-                let i = Int((p.x / colW).rounded(.down))
-                hover = hours.indices.contains(i) ? i : nil
-            case .ended: hover = nil
-            @unknown default: hover = nil
-            }
+        // Hover on a pointer, tap or scrub on a finger. See `PointReadout`.
+        .pointReadout($hover) { point in
+            let i = Int((point.x / colW).rounded(.down))
+            return hours.indices.contains(i) ? i : nil
         }
     }
 

@@ -7,7 +7,7 @@ ANALYSIS := analysis
 NOTEBOOK := notebooks/00-one-day.ipynb
 
 .DEFAULT_GOAL := help
-.PHONY: help notebook lab sync clean-cache
+.PHONY: help notebook lab sync clean-cache generate version
 
 help: ## List the targets
 	@echo "Vane"
@@ -28,6 +28,19 @@ sync: | uv-installed ## Install or update the Python environment
 clean-cache: ## Delete the Parquet cache; it rebuilds from the NDJSON on next read
 	rm -rf $(ANALYSIS)/cache
 	@echo "Cache cleared. The next samples() call rebuilds it (~10s)."
+
+generate: ## Regenerate Vane.xcodeproj from project.yml
+	@command -v xcodegen >/dev/null || { \
+		echo "xcodegen isn't installed. Get it with:"; \
+		echo "    brew install xcodegen"; \
+		exit 1; }
+	xcodegen generate
+
+# Nothing to run before archiving — the build number is stamped by a build phase
+# (see Scripts/stamp-build-number.sh), so Archive in Xcode is already correct.
+# This is for reading it off beforehand, or matching a TestFlight build to a commit.
+version: ## Show the build number the next build will stamp
+	@Scripts/stamp-build-number.sh --print
 
 # A missing `uv` is the one failure here with a non-obvious fix, so say the fix
 # rather than letting make print "command not found" and stop.

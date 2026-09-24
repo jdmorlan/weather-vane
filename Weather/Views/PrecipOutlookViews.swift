@@ -35,13 +35,24 @@ final class PrecipOutlookModel: ObservableObject {
     @Published private(set) var failure: String?
     @Published private(set) var isLoading = false
 
+    /// There is no point to ask about yet.
+    ///
+    /// THE STATE THAT WAS MISSING, and its absence read as a bug in the card. A
+    /// nil home made `load` return having touched nothing, so Rain showed "No
+    /// forecast yet" — a sentence that describes the models, about a request that
+    /// was never made. The reader has no way to tell that apart from five
+    /// forecasts all declining to answer, and nothing on the screen says what to
+    /// do about it.
+    @Published private(set) var needsHome = false
+
     /// The models land on the hour, and NBM and HRRR rerun hourly. Twenty minutes
     /// is often enough to catch a new run soon after it publishes without asking
     /// five models' worth of question every time someone opens the tab.
     static let refreshEvery: Duration = .seconds(20 * 60)
 
     func load(home: GeoPoint?) async {
-        guard let home else { return }
+        guard let home else { needsHome = true; return }
+        needsHome = false
         isLoading = true
         defer { isLoading = false }
         do {
@@ -70,6 +81,10 @@ struct PrecipOutlookCard: View {
     let outlook: PrecipOutlook?
     let failure: String?
     let isLoading: Bool
+    /// Nothing has been asked, because there is nowhere to ask about.
+    var needsHome: Bool = false
+    /// Opens setup. Optional so the card stays usable from a preview.
+    var onSetUpHome: (() -> Void)?
 
     var body: some View {
         if let outlook {
@@ -77,6 +92,22 @@ struct PrecipOutlookCard: View {
                 verdict(outlook)
                 grid(outlook)
                 footer(outlook)
+            }
+        } else if needsHome {
+            // NAMED, AND WITH THE DOOR IN IT. This card is the one forecast in
+            // the app that needs no station, so it is the first thing a
+            // half-configured install can show — which makes it the wrong place
+            // for a shrug.
+            VStack(alignment: .leading, spacing: 10) {
+                Text("No home location set")
+                    .font(.callout.weight(.medium))
+                Text("These five models answer about a point on the map, not about your station. Setup finds it from the station you connect, or you can place it yourself.")
+                    .font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                if let onSetUpHome {
+                    Button("Set your location", action: onSetUpHome)
+                        .buttonStyle(.link)
+                }
             }
         } else if isLoading {
             Text("Asking the models…").font(.callout).foregroundStyle(.secondary)

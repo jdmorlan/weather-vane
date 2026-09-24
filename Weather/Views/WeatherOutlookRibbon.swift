@@ -122,15 +122,11 @@ struct OutlookRibbon: View {
                     .position(x: x(Double(run.first + run.last) / 2, colW), y: lanes.icon / 2)
             }
         }
-        .contentShape(Rectangle())
-        .onContinuousHover { phase in
-            switch phase {
-            case .active(let p):
-                let i = Int((p.x / colW).rounded(.down))
-                hover = days.indices.contains(i) ? i : nil
-            case .ended: hover = nil
-            @unknown default: hover = nil
-            }
+        // Hover on a pointer, tap or scrub on a finger — same `hover` state and
+        // the same `drawHover` readout either way. See `PointReadout`.
+        .pointReadout($hover) { point in
+            let i = Int((point.x / colW).rounded(.down))
+            return days.indices.contains(i) ? i : nil
         }
     }
 

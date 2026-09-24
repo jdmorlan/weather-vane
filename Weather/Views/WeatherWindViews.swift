@@ -492,7 +492,7 @@ struct WindSurface: View {
             } else {
                 Text(activeMonth == nil ? "The whole record" : monthName(activeMonth!))
                     .font(.title2.weight(.medium))
-                Text("point at a quarter to narrow it")
+                Text("\(Platform.pointVerb) a quarter to narrow it")
                     .font(.caption).foregroundStyle(.tertiary)
             }
             Spacer(minLength: 0)

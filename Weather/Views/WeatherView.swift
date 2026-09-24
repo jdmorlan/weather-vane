@@ -105,9 +105,15 @@ struct WeatherView: View {
     /// sidebar it has to be a request rather than an assignment.
     var navigate: (Destination) -> Void
 
+    /// Ask the window to open setup. A request for the same reason `navigate` is
+    /// one: the sheet is owned by the root, because a sheet presented by a view
+    /// that navigation can unmount is a sheet that vanishes mid-flow.
+    var openSetup: () -> Void
+
     init(models: StationModels,
          destination: Destination,
-         navigate: @escaping (Destination) -> Void = { _ in }) {
+         navigate: @escaping (Destination) -> Void = { _ in },
+         openSetup: @escaping () -> Void = {}) {
         model = models.weather
         archive = models.archive
         samples = models.samples
@@ -118,6 +124,7 @@ struct WeatherView: View {
         precip = models.precip
         self.destination = destination
         self.navigate = navigate
+        self.openSetup = openSetup
     }
 
     var body: some View {
@@ -286,7 +293,9 @@ struct WeatherView: View {
         card(label: "Next 18 hours") {
             PrecipOutlookCard(outlook: precip.outlook,
                               failure: precip.failure,
-                              isLoading: precip.isLoading)
+                              isLoading: precip.isLoading,
+                              needsHome: precip.needsHome,
+                              onSetUpHome: openSetup)
         }
 
         if let climate = archive.climatology, climate.dayCount >= 90 {
@@ -334,6 +343,20 @@ struct WeatherView: View {
         } else if samples.isPreparing {
             preparing("Reading the wind out of your archive",
                       detail: "The rose is built from every minute on record, which takes a moment the first time.")
+        } else if let fill = archive.progress {
+            // THE DAY-ONE STATE, and it used to fall through to "No wind history
+            // yet" below — a flat claim about the station, made while the thing
+            // the wind is derived FROM was still arriving. The sample fill cannot
+            // even start until the daily archive knows which days exist (see
+            // `StationModels.catchUpArchives`), so on a device that has nothing on
+            // disk this is the first true answer, and it is a WAIT rather than a
+            // nothing. Never seen on a machine that has been running a while,
+            // where `progress` is nil within a second of launch.
+            waiting("Finding out which days your station has",
+                    detail: fill.daysArchived > 0
+                        ? "\(fill.daysArchived.formatted()) days so far"
+                        : "The minutes the wind is built from come after this.",
+                    fraction: fill.fraction)
         } else {
             // Direction is the one measure the DAILY archive never kept — a mean of
             // a circular quantity is meaningless — so this tab cannot fall back on
@@ -531,9 +554,20 @@ struct WeatherView: View {
         if let climate = archive.climatology, climate.dayCount >= 90 {
             RhythmQuestionsView(climate: climate, today: todayKey(r),
                                 forecast: seasonForecast(r))
-            if let shape = samples.dayShape, shape.isMeaningful {
-                card(label: "The shape of a day") {
+            // ALWAYS A CARD, even without its answer. This one is built from the
+            // minute archive rather than the daily one, so it arrives on its own
+            // schedule — and when it was simply absent until then, nothing on the
+            // page said it was coming.
+            card(label: "The shape of a day") {
+                if let shape = samples.dayShape, shape.isMeaningful {
                     DayShapeCard(climate: shape)
+                } else if samples.isPreparing || samples.foldProgress != nil || samples.fillProgress != nil {
+                    rhythmPending("Reading the shape of a day out of your archive",
+                                  detail: "It's built from every minute on record, which takes a moment the first time.")
+                } else if samples.dayShape != nil {
+                    rhythmPending(nil, detail: "Not enough minute-by-minute record yet — it needs about ten days of it. It fills in as the station's minutes are archived.")
+                } else {
+                    rhythmPending(nil, detail: "Waiting on the minute-by-minute archive. It builds after the daily one has caught up; this card fills in once it has.")
                 }
             }
             card(label: "Winter chill") {
@@ -546,6 +580,22 @@ struct WeatherView: View {
                                    description: Text("Rhythms are read out of the years behind you — when the nights let go, when the first freeze lands. It needs about a season of archive before it can say any of that."))
                 .emptyStatePanel()
         }
+    }
+
+    /// A card's body before it has anything to show — said in the card, so the
+    /// card itself is still there to be missed.
+    private func rhythmPending(_ title: String?, detail: String) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if let title {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text(title).font(.callout.weight(.medium))
+                }
+            }
+            Text(detail).font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// The ten-day outlook in the archive's own terms, so the season timeline can
@@ -966,7 +1016,7 @@ struct WeatherView: View {
                             .foregroundStyle(.tertiary)
                     }
                     Spacer(minLength: 0)
-                    Text("hover a day for the rest").foregroundStyle(.tertiary)
+                    Text("\(Platform.pointVerb) a day for the rest").foregroundStyle(.tertiary)
                 }
                 .font(.caption2)
             }

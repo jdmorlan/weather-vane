@@ -92,7 +92,22 @@ struct RootView: View {
         // On the root for the same reason as the hazard poll: a new model run
         // landing while you are reading History should be there when you go back
         // to Rain, not start loading when you arrive.
-        .task { await models.precip.poll(home: settings.homePoint) }
+        //
+        // KEYED TO HOME, AND THE KEY IS THE BUG FIX. `poll` takes the point by
+        // VALUE and loops on it forever, so an unkeyed `.task` captured whatever
+        // home was at the instant the root appeared — which on a device being set
+        // up for the first time is nil, because setup has not run yet. `load`
+        // returns immediately on a nil home without setting `outlook` or
+        // `failure`, so Rain sat on "No forecast yet" for the whole session and
+        // only came right after a relaunch. The hazard poll never had this: it
+        // takes the settings OBJECT and re-reads it every pass.
+        //
+        // A string rather than the `GeoPoint`: `.task(id:)` wants `Hashable` and
+        // the point is only `Equatable`. Restarting also covers moving home,
+        // which the old code could not do at all.
+        .task(id: "\(settings.homeLat)|\(settings.homeLon)") {
+            await models.precip.poll(home: settings.homePoint)
+        }
         // A kept-alive window outlives midnight, and appearing is no longer a
         // proxy for "a new day". Without this the archive stops at the day the
         // app was launched, and yesterday can never be measured or graded.
@@ -139,7 +154,9 @@ struct RootView: View {
             }
         case .now, .rhythms, .rain, .history, .wind, .explore:
             if settings.hasWeatherStation {
-                WeatherView(models: models, destination: destination) { destination = $0 }
+                WeatherView(models: models, destination: destination,
+                            navigate: { destination = $0 },
+                            openSetup: { showingSetup = true })
             } else {
                 needsStation
             }

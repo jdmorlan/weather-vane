@@ -15,6 +15,7 @@ targets:
   Vane:
     type: application
     platform: macOS
+    templates: [Stamped]
     sources:
       - Weather
     dependencies:
@@ -50,6 +51,10 @@ targets:
         # upload. Vane's only cryptography is HTTPS to WeatherFlow, the NWS and
         # Open-Meteo, which is exempt — there is no encryption of its own.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "NO"
+        # THE FLOOR, NOT THE BUILD NUMBER. `Scripts/stamp-build-number.sh`
+        # overwrites CFBundleVersion in the built Info.plist on every build; this
+        # only has to exist so there is a key for it to overwrite, and so a build
+        # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
 
   # The SAME sources as the Mac app, deliberately — not a VaneTV-style
@@ -62,6 +67,7 @@ targets:
   VaneiOS:
     type: application
     platform: iOS
+    templates: [Stamped]
     sources:
       - Weather
     dependencies:
@@ -96,6 +102,10 @@ targets:
         # upload. Vane's only cryptography is HTTPS to WeatherFlow, the NWS and
         # Open-Meteo, which is exempt — there is no encryption of its own.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "NO"
+        # THE FLOOR, NOT THE BUILD NUMBER. `Scripts/stamp-build-number.sh`
+        # overwrites CFBundleVersion in the built Info.plist on every build; this
+        # only has to exist so there is a key for it to overwrite, and so a build
+        # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
         # iPad only TODAY, while the id says iOS. Not a contradiction — the id
         # is permanent and the device family is a build setting. Naming this
@@ -112,6 +122,7 @@ targets:
   VaneTV:
     type: application
     platform: tvOS
+    templates: [Stamped]
     sources:
       - VaneTV
     dependencies:
@@ -130,8 +141,36 @@ targets:
         # upload. Vane's only cryptography is HTTPS to WeatherFlow, the NWS and
         # Open-Meteo, which is exempt — there is no encryption of its own.
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: "NO"
+        # THE FLOOR, NOT THE BUILD NUMBER. `Scripts/stamp-build-number.sh`
+        # overwrites CFBundleVersion in the built Info.plist on every build; this
+        # only has to exist so there is a key for it to overwrite, and so a build
+        # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "3"
+
+# THE BUILD NUMBER, ONCE, FOR ALL THREE APPS.
+#
+# A template rather than the same six lines pasted into each target: they must
+# not drift, because the one way this fails silently is two apps disagreeing
+# about what a build number means while both upload happily.
+targetTemplates:
+  Stamped:
+    postBuildScripts:
+      # LAST PHASE, WHICH IS STILL BEFORE CODE SIGNING. Xcode signs after every
+      # build phase has run, so the Info.plist is stamped and then signed, never
+      # the other way round.
+      #
+      # A SCRIPT PHASE RATHER THAN A VALUE IN THIS FILE, which was the obvious
+      # thing and is the wrong one: a number baked in at `xcodegen generate` time
+      # is only as fresh as the last time somebody remembered to run it, and the
+      # moment it matters — hitting Archive in Xcode before a TestFlight upload —
+      # is exactly the moment nobody is thinking about a YAML file. Worked out at
+      # build time, it cannot be stale.
+      - script: '"$SRCROOT/Scripts/stamp-build-number.sh"'
+        name: Stamp build number
+        # There is no input for Xcode to compare against — the answer depends on
+        # the clock. Without this it runs once and is then skipped all day.
+        basedOnDependencyAnalysis: false
 
 # Declared rather than left to Xcode. Xcode invents a scheme the first time you
 # open a target and stores it under xcuserdata, which `xcodegen generate` then
