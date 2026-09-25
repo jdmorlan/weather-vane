@@ -147,6 +147,19 @@ enum Platform {
         #endif
     }
 
+    /// Whether this device keeps the station's archive. The iPhone does not — it
+    /// is the live app, and `PhoneRoot` never builds `StationModels` — so any
+    /// sentence promising "years of your own readings" on it would be a lie.
+    /// Decided by the same idiom `WeatherApp` chooses the root by, so the copy
+    /// and the behaviour cannot disagree.
+    static var keepsArchive: Bool {
+        #if os(macOS)
+        return true
+        #else
+        return UIDevice.current.userInterfaceIdiom != .phone
+        #endif
+    }
+
     /// What a hint printed under a chart tells you to DO to read it — "hover a
     /// day for the rest" on a Mac, "tap a day" on an iPad.
     ///

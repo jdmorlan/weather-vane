@@ -46,22 +46,78 @@ struct SetupSheet: View {
 
     @State private var step: Step = .welcome
 
+    /// The station arrived from iCloud while this sheet was still at the start.
+    ///
+    /// WHY THIS HAS TO LISTEN. A new device opens setup at once, but its first
+    /// iCloud sync can take a minute to land — so someone who set Vane up on
+    /// their Mac was being asked for a token they had already given, and could
+    /// be halfway through pasting it again when the real one arrived. There is
+    /// no "iCloud has finished checking" signal to wait for, so instead the
+    /// sheet watches: if a station appears before they have committed their
+    /// own, it stops asking and says so.
+    @State private var arrivedFromSync = false
+
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
+
+    /// A phone. The sheet's 540×470 is a Mac window's size and an iPad form
+    /// sheet's; on a phone it ran off both edges. There it takes the screen and
+    /// scrolls, with the controls pinned underneath.
+    private var isCompact: Bool {
+        #if os(iOS)
+        return sizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
     var body: some View {
         VStack(spacing: 0) {
-            content
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-                .padding(.horizontal, 34)
-                .padding(.top, 30)
+            if isCompact {
+                ScrollView {
+                    content
+                        .frame(maxWidth: .infinity, alignment: .topLeading)
+                        .padding(.horizontal, 22)
+                        .padding(.top, 26)
+                        .padding(.bottom, 16)
+                }
+            } else {
+                content
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                    .padding(.horizontal, 34)
+                    .padding(.top, 30)
+            }
             Divider()
             controls
                 .padding(.horizontal, 22)
                 .padding(.vertical, 14)
         }
-        .frame(width: 540, height: 470)
-        .onAppear { model.seed(from: settings) }
+        .frame(width: isCompact ? nil : 540, height: isCompact ? nil : 470)
+        .onAppear {
+            model.seed(from: settings)
+            // Already here by the time the sheet appeared — a fast sync, or a
+            // relaunch after one. Same answer as arriving a moment later.
+            if settings.hasWeatherStation, !settings.hasSeenSetup { arrivedFromSync = true }
+        }
+        .onChange(of: settings.hasWeatherStation) { _, has in
+            // Only before they've started on their own: on Welcome, or on
+            // Station with nothing typed. A token they entered themselves
+            // commits on the way to Home, so it never trips this.
+            guard has, step == .welcome || (step == .station && model.token.isEmpty) else { return }
+            withAnimation { arrivedFromSync = true }
+        }
     }
 
     @ViewBuilder private var content: some View {
+        if arrivedFromSync {
+            synced
+        } else {
+            stepContent
+        }
+    }
+
+    @ViewBuilder private var stepContent: some View {
         switch step {
         case .welcome: welcome
         case .station: station
@@ -77,20 +133,61 @@ struct SetupSheet: View {
             Image(systemName: "cloud.sun.fill")
                 .font(.system(size: 42))
                 .foregroundStyle(.tint)
-            Text("Your station, and everything it remembers")
+            Text(Platform.keepsArchive ? "Your station, and everything it remembers"
+                                       : "Your station, right now")
                 .font(.title2.weight(.semibold))
             // "this Mac" was true when there was only a Mac. The sentence is
             // making a promise about where the record lives — on the machine in
             // front of you, not in someone's cloud — so the noun has to be the
             // machine in front of you.
-            Text("This app reads your Tempest station directly — what it's doing right now, and the whole record behind it. It keeps its own archive on this \(Platform.deviceNoun), so questions like “how often has it rained this late in September” have an answer that isn't a guess.")
-                .foregroundStyle(.secondary)
+            if Platform.keepsArchive {
+                Text("This app reads your Tempest station directly — what it's doing right now, and the whole record behind it. It keeps its own archive on this \(Platform.deviceNoun), so questions like “how often has it rained this late in September” have an answer that isn't a guess.")
+                    .foregroundStyle(.secondary)
+            } else {
+                // The phone is the live app: no archive, so no promise of one.
+                // Where the record lives is worth saying, though — it is the
+                // first thing someone who knows the iPad app will look for.
+                Text("This app reads your Tempest station directly — what it's doing right now, how today has gone so far, and the ten days ahead. The years of readings behind it live in the iPad and Mac apps.")
+                    .foregroundStyle(.secondary)
+            }
             VStack(alignment: .leading, spacing: 11) {
-                bullet("bolt.fill", "Live conditions, today's shape, and a ten-day it grades itself on")
-                bullet("clock.arrow.circlepath", "Years of your own readings, searchable")
+                if Platform.keepsArchive {
+                    bullet("bolt.fill", "Live conditions, today's shape, and a ten-day it grades itself on")
+                    bullet("clock.arrow.circlepath", "Years of your own readings, searchable")
+                } else {
+                    bullet("bolt.fill", "Live conditions, today's shape, and the ten-day")
+                }
                 bullet("antenna.radiowaves.left.and.right", "Radar and NWS warnings — these work without a station")
             }
             .padding(.top, 2)
+            // Said up front, so that someone expecting their station to follow
+            // them knows to give it a moment rather than start typing.
+            Label("Already set up Vane on another device with this iCloud account? Your station will arrive here by itself — it can take a minute.",
+                  systemImage: "icloud")
+                .font(.caption).foregroundStyle(.secondary)
+                .padding(.top, 4)
+            Spacer()
+        }
+    }
+
+    // MARK: Arrived from iCloud
+
+    private var synced: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Image(systemName: "checkmark.icloud.fill")
+                .font(.system(size: 42))
+                .foregroundStyle(.green)
+            Text("You're already set up")
+                .font(.title2.weight(.semibold))
+            Text("Your station, \(settings.stationLabel), came over from your other device through iCloud\(settings.hasHome ? ", along with your home location" : ""). There's nothing to enter.")
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            // Facing is the one thing that deliberately does not travel — it is
+            // about a person in their own doorway — so it is the one thing left
+            // worth offering.
+            Text("The one thing that doesn't carry over is which way the house faces. It's optional.")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
             Spacer()
         }
     }
@@ -265,18 +362,21 @@ struct SetupSheet: View {
             FacingPicker(degrees: $settings.homeFacing)
                 .padding(.top, 2)
 
-            Divider().padding(.vertical, 4)
-
             // The last screen is also where the app sets an expectation it would
             // otherwise fail: the first launch fetches years of history, the
             // Wind and History surfaces are empty until it lands, and someone
             // who wasn't told that reasonably concludes the app is broken.
-            Label {
-                Text("When you finish, the app starts downloading your station's history in the background. History and Wind fill in as it arrives — the first pass takes a few minutes.")
-            } icon: {
-                Image(systemName: "arrow.down.circle")
+            // Not on a phone, which downloads no history at all.
+            if Platform.keepsArchive {
+                Divider().padding(.vertical, 4)
+
+                Label {
+                    Text("When you finish, the app starts downloading your station's history in the background. History and Wind fill in as it arrives — the first pass takes a few minutes.")
+                } icon: {
+                    Image(systemName: "arrow.down.circle")
+                }
+                .font(.callout).foregroundStyle(.secondary)
             }
-            .font(.callout).foregroundStyle(.secondary)
 
             Spacer()
         }
@@ -284,7 +384,24 @@ struct SetupSheet: View {
 
     // MARK: Controls
 
-    private var controls: some View {
+    @ViewBuilder private var controls: some View {
+        if arrivedFromSync {
+            HStack {
+                Button("Set which way it faces") {
+                    arrivedFromSync = false
+                    step = .facing
+                }
+                .buttonStyle(.link)
+                Spacer()
+                Button("Start") { finish(configured: true) }
+                    .keyboardShortcut(.defaultAction)
+            }
+        } else {
+            stepControls
+        }
+    }
+
+    private var stepControls: some View {
         HStack {
             if step == .welcome {
                 // "Skip" only exists on the first screen, and it is worded as
