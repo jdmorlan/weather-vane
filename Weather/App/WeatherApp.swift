@@ -19,7 +19,7 @@ struct WeatherApp: App {
 
     var body: some Scene {
         WindowGroup {
-            RootView()
+            root
                 .environmentObject(settings)
             #if os(macOS)
                 // Wider than the old two-tab window: the sidebar takes ~190pt
@@ -42,6 +42,22 @@ struct WeatherApp: App {
             SettingsView()
                 .environmentObject(settings)
         }
+        #endif
+    }
+
+    /// The iPhone gets its own root, in the same binary. Chosen by idiom, not
+    /// by size class: an iPad in Slide Over is narrow but is still the device
+    /// with the archive and the sidebar app, and a phone is never anything else.
+    /// See `PhoneRoot` for why this is not a second target.
+    @ViewBuilder private var root: some View {
+        #if os(iOS)
+        if UIDevice.current.userInterfaceIdiom == .phone {
+            PhoneRoot()
+        } else {
+            RootView()
+        }
+        #else
+        RootView()
         #endif
     }
 }

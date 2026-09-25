@@ -247,8 +247,13 @@ struct RightNowCard: View {
     // MARK: Comfort gauges — where the current readings sit, and what the scale means
 
     @ViewBuilder private var comfortGauges: some View {
+        // Stacked on a phone: side by side at that width each gauge gets about
+        // 150pt, and its five zone labels truncate to "Co… Sti… Mu…".
+        let layout = isCompact
+            ? AnyLayout(VStackLayout(alignment: .leading, spacing: 18))
+            : AnyLayout(HStackLayout(alignment: .top, spacing: 22))
         if r.comfort.dewPoint != nil || r.feelsLike != nil {
-            HStack(alignment: .top, spacing: 22) {
+            layout {
                 if let dew = r.comfort.dewPoint {
                     ComfortGauge(
                         title: "DEW POINT",

@@ -17,7 +17,11 @@ targets:
     platform: macOS
     templates: [Stamped]
     sources:
-      - Weather
+      # Everything but the iPhone's root, which is UIKit-idiom code with no
+      # meaning on a Mac. See `PhoneRoot`.
+      - path: Weather
+        excludes:
+          - "Phone/**"
     dependencies:
       - package: WeatherKit
     settings:
@@ -91,11 +95,15 @@ targets:
         # multitasking requires every orientation — a Split View pane cannot be
         # told the app refuses to be one way up. Declaring three fails upload
         # validation outright rather than merely warning.
-        INFOPLIST_KEY_UISupportedInterfaceOrientations: >-
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad: >-
           UIInterfaceOrientationPortrait
           UIInterfaceOrientationPortraitUpsideDown
           UIInterfaceOrientationLandscapeLeft
           UIInterfaceOrientationLandscapeRight
+        # The phone is portrait only: a scroll of cards held in one hand. The
+        # multitasking rule above does not reach it — an iPhone app has no Split
+        # View pane to refuse.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "0.1"
         # Answered in the build so App Store Connect stops asking on every
@@ -107,12 +115,12 @@ targets:
         # only has to exist so there is a key for it to overwrite, and so a build
         # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
-        # iPad only TODAY, while the id says iOS. Not a contradiction — the id
-        # is permanent and the device family is a build setting. Naming this
-        # `.ipad` would have committed the phone to being a SECOND app on the
-        # store before there is a phone app at all; `.ios` stays true whether
-        # this widens to universal or the phone gets its own listing later.
-        TARGETED_DEVICE_FAMILY: "2"
+        # UNIVERSAL, which is what the `.ios` id was kept open for. The phone is
+        # a different app in every way you can see — two tabs, no archive — but
+        # the same binary, because a second target would need a second id and so
+        # a second App Store listing. `WeatherApp` picks the root by idiom; see
+        # `PhoneRoot`.
+        TARGETED_DEVICE_FAMILY: "1,2"
         # NO APP-GROUP ENTITLEMENT, on purpose. `AppGroup.resolve` falls back to
         # Application Support when the container is nil, which on iOS is already
         # the app's own sandboxed directory — the right home. A group is only
