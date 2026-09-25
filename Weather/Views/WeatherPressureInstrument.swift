@@ -44,7 +44,29 @@ struct PressureInstrument: View {
         }
     }
 
+    /// The reading and the trace on one line where they fit, the trace on its
+    /// own line where they don't — a phone, once "+0.10 over 3h" is showing.
+    ///
+    /// THE GAP THIS CLOSES. The trace's "next 24h" label was the only flexible
+    /// thing in the row, so when the row ran short SwiftUI squeezed it to nearly
+    /// no width and it wrapped a letter per line: invisible, but tall, with the
+    /// sparkline centred against it. That hung the trace below the reading and
+    /// left a blank band under it — on the Mac too, not only the phone.
     private var header: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .firstTextBaseline, spacing: 8) {
+                reading
+                Spacer(minLength: 0)
+                if trace.count > 2 { traceSpark }
+            }
+            VStack(alignment: .leading, spacing: 6) {
+                reading
+                if trace.count > 2 { traceSpark }
+            }
+        }
+    }
+
+    private var reading: some View {
         HStack(alignment: .firstTextBaseline, spacing: 8) {
             Text("PRESSURE").font(.caption2.weight(.semibold)).tracking(0.5)
                 .foregroundStyle(.tertiary)
@@ -57,8 +79,6 @@ struct PressureInstrument: View {
                 Text(String(format: "%+.2f over 3h", delta3h))
                     .font(.callout).foregroundStyle(.secondary)
             }
-            Spacer(minLength: 0)
-            if trace.count > 2 { traceSpark }
         }
     }
 
@@ -122,6 +142,7 @@ struct PressureInstrument: View {
             }
             .frame(width: 74, height: 18)
             Text("next \(trace.count)h").font(.system(size: 9)).foregroundStyle(.tertiary)
+                .fixedSize()
         }
         .help(String(format: "Forecast pressure spans %.2f–%.2f inHg over the next %dh",
                      lo, hi, trace.count))

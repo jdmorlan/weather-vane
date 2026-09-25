@@ -153,9 +153,37 @@ struct HourlyRibbon: View {
                 ScrollView(.horizontal, showsIndicators: false) {
                     figure(width: minWidth).frame(width: minWidth)
                 }
+                // Opens at NOW, not at midnight. The frame runs midnight to
+                // midnight on purpose, but on a phone it is three screens wide,
+                // and opening on the left edge meant that at seven in the evening
+                // the first thing shown was 12–6 AM with the present two swipes
+                // away. The morning is still there, one swipe back.
+                .defaultScrollAnchor(nowAnchor(viewport: geo.size.width, content: minWidth),
+                                     for: .initialOffset)
+                // A NEW FRAME IS A NEW SCROLL. The first draw is usually the
+                // forecast alone — today's minutes haven't arrived — which starts
+                // AT now, so the initial offset is zero; then the midnight frame
+                // replaces it in the same scroll view, which keeps that offset.
+                // Keyed to the first hour, a changed frame gets its own initial
+                // offset, while a refresh of the same day (same midnight) keeps
+                // wherever you had scrolled to.
+                .id(hours.first?.epoch)
             }
         }
         .frame(height: height)
+    }
+
+    /// The scroll anchor that puts now about a third of the way in — enough of
+    /// the last couple of hours to read the trend, the rest of the view ahead.
+    ///
+    /// An anchor `u` aligns the content's point at `u` with the viewport's point
+    /// at `u`, which scrolls to `u * (content - viewport)`; so solving for the
+    /// offset that lands now at 30% gives `u`.
+    private func nowAnchor(viewport: CGFloat, content: CGFloat) -> UnitPoint? {
+        guard let nowIndex, content > viewport else { return nil }
+        let nowX = (CGFloat(nowIndex) + 0.5) * content / CGFloat(max(hours.count, 1))
+        let u = (nowX - viewport * 0.3) / (content - viewport)
+        return UnitPoint(x: min(max(u, 0), 1), y: 0.5)
     }
 
     private func figure(width: CGFloat) -> some View {
