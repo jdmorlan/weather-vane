@@ -9,9 +9,15 @@
 //  when the muggy stretch ends, and which day the rain lands on. Those are questions
 //  about the SHAPE of a week, and a shape has to be drawn as one continuous thing.
 //
+//  NO WEEKEND SHADING. Saturday and Sunday used to sit under a grey wash, on the
+//  theory that finding the weekend should not cost a read of ten labels. It never
+//  did: SAT and SUN are already printed along the axis, the wash said nothing
+//  they didn't, and with no legend it read as a mystery region rather than a
+//  convenience.
+//
 //  So: the highs and lows become a band (the day's swing is the thickness of it),
 //  labelled only where it turns; the sky is drawn once per run of unchanging sky;
-//  humidity is a wash of four stretches per day, so a heavy weekend is a block of
+//  humidity is a wash of four stretches per day, so a muggy stretch is a block of
 //  color you find without reading; and rain keeps the hourly lane's grammar —
 //  height is the chance, fill is the water.
 //
@@ -34,7 +40,7 @@ struct OutlookRibbon: View {
     private let span: ClosedRange<Double>
     private let hasRain: Bool
     private let hasComfort: Bool
-    private let labels: [(weekday: String, date: String, weekend: Bool)]
+    private let labels: [(weekday: String, date: String)]
     private let rain: [(prob: Double, amount: Double?)]
 
     @State private var hover: Int?
@@ -47,18 +53,14 @@ struct OutlookRibbon: View {
     init(days: [DayNote], timezone: TimeZone?) {
         self.days = days
 
-        var cal = Calendar(identifier: .gregorian)
-        cal.timeZone = timezone ?? .current
         let md = DateFormatter()
         md.timeZone = timezone
         md.locale = Locale(identifier: "en_US")
         md.dateFormat = "M/d"
         self.labels = days.enumerated().map { i, d in
             let date = Date(timeIntervalSince1970: TimeInterval(d.epoch))
-            let weekday = cal.component(.weekday, from: date)
             return (i == 0 ? "TODAY" : d.weekday.uppercased(),
-                    md.string(from: date),
-                    weekday == 1 || weekday == 7)
+                    md.string(from: date))
         }
 
         var runs: [IconRun] = []
@@ -146,27 +148,11 @@ struct OutlookRibbon: View {
         let rainTop = dewTop + l.dew + (hasRain ? 4 : 0)
         let axisTop = rainTop + l.rain + 4
 
-        drawWeekend(ctx, colW, top: 0, bottom: axisTop)
         drawBand(ctx, colW, top: plotTop, height: l.plot)
         if hasComfort { drawComfort(ctx, colW, top: dewTop, height: l.dew) }
         if hasRain { drawRain(ctx, colW, top: rainTop, height: l.rain) }
         drawAxis(ctx, colW, top: axisTop)
         drawHover(ctx, colW, size: size, plotTop: plotTop, plotHeight: l.plot, bottom: axisTop)
-    }
-
-    /// Saturday and Sunday as a wash. Locating the weekend is most of what a person
-    /// does with a ten-day forecast, and it shouldn't cost a read of ten labels.
-    private func drawWeekend(_ ctx: GraphicsContext, _ colW: CGFloat, top: CGFloat, bottom: CGFloat) {
-        var i = 0
-        while i < days.count {
-            guard labels[i].weekend else { i += 1; continue }
-            var j = i
-            while j + 1 < days.count, labels[j + 1].weekend { j += 1 }
-            let rect = CGRect(x: CGFloat(i) * colW, y: top,
-                              width: CGFloat(j - i + 1) * colW, height: bottom - top)
-            ctx.fill(Path(roundedRect: rect, cornerRadius: 6), with: .color(.primary.opacity(0.05)))
-            i = j + 1
-        }
     }
 
     /// Highs and lows as one band: the line pair is the week's trend, the thickness
