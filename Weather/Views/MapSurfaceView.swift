@@ -78,6 +78,11 @@ struct MapSurfaceView: View {
     @StateObject private var hazards = WeatherHazardModel()
 
     @State private var surface: MapSurface = .radar
+    /// The layers sheet, on a compact width only. See `controls`.
+    @State private var showingLayers = false
+    #if os(iOS)
+    @Environment(\.horizontalSizeClass) private var sizeClass
+    #endif
     /// Additive, and only ever these two. See `MapLayerRole.context`.
     @State private var context: Set<String> = ["warnings", "home", "coverage"]
     @State private var band: SatelliteFieldSource.Band = .infrared
@@ -164,7 +169,7 @@ struct MapSurfaceView: View {
     var body: some View {
         ZStack(alignment: .topTrailing) {
             canvas
-            panel.padding(14)
+            controls.padding(14)
         }
         .overlay(alignment: .bottom) {
             // The padding lives here, not on the timeline: the timeline is absent
@@ -201,6 +206,15 @@ struct MapSurfaceView: View {
         .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
         .onChange(of: settings.homeLat) { _, _ in radar.site = resolvedSite }
         .onChange(of: radarModeChoice) { _, new in radar.mode = new }
+        .sheet(isPresented: $showingLayers) {
+            ScrollView {
+                panel(fillsWidth: true).padding(20)
+            }
+            // Half height, so the map stays in view above it and a change of
+            // layer is seen landing rather than taken on trust.
+            .presentationDetents([.medium, .large])
+            .presentationDragIndicator(.visible)
+        }
         .onAppear {
             radar.mode = radarModeChoice
             radar.site = resolvedSite
@@ -643,7 +657,39 @@ struct MapSurfaceView: View {
 
     // MARK: Panel
 
-    private var panel: some View {
+    /// The panel where there is room for it beside the map, and a button that
+    /// opens it where there is not.
+    ///
+    /// A PHONE HAS NO ROOM BESIDE THE MAP. The panel is 226pt wide, which on a
+    /// 400pt screen covered half the map it exists to control. So on a compact
+    /// width the corner holds one button naming what is on screen — "Radar",
+    /// not a generic layers glyph, because which picture you are looking at is
+    /// the first thing the map owes you — and the same panel opens as a sheet.
+    @ViewBuilder private var controls: some View {
+        if isCompact {
+            Button { showingLayers = true } label: {
+                Label(surface.label, systemImage: surface.symbol)
+                    .font(.callout.weight(.medium))
+                    .padding(.horizontal, 14).padding(.vertical, 9)
+                    .background(.regularMaterial, in: Capsule())
+                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+            }
+            .buttonStyle(.plain)
+            .accessibilityHint("Choose what the map shows")
+        } else {
+            panel(fillsWidth: false)
+        }
+    }
+
+    private var isCompact: Bool {
+        #if os(iOS)
+        return sizeClass == .compact
+        #else
+        return false
+        #endif
+    }
+
+    private func panel(fillsWidth: Bool) -> some View {
         // Spelled out rather than a ternary in the argument list: `hasHome ? f : nil`
         // gives the type checker a function-vs-nil unification it cannot do inside
         // a ViewBuilder, and the diagnostic it produces names none of that.
@@ -657,7 +703,8 @@ struct MapSurfaceView: View {
                           home: settings.homeCoordinate,
                           captions: captions,
                           contextLayers: layers.filter { $0.role == .context },
-                          recenter: recenter)
+                          recenter: recenter,
+                          fillsWidth: fillsWidth)
     }
 
     /// One caption per view, so the picker can say something true about each
@@ -712,6 +759,9 @@ private struct LayerPanel: View {
     let captions: [MapSurface: String]
     let contextLayers: [MapLayer]
     let recenter: (() -> Void)?
+    /// In a sheet: the sheet's width, and no card of its own — the sheet is
+    /// already the surface it sits on.
+    var fillsWidth = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
@@ -737,10 +787,22 @@ private struct LayerPanel: View {
                 .buttonStyle(.borderless)
             }
         }
-        .padding(12)
-        .frame(width: 226)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
+        .modifier(PanelCard(fillsWidth: fillsWidth))
+    }
+
+    private struct PanelCard: ViewModifier {
+        let fillsWidth: Bool
+        func body(content: Content) -> some View {
+            if fillsWidth {
+                content.frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                content
+                    .padding(12)
+                    .frame(width: 226)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+                    .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
+            }
+        }
     }
 
     private func heading(_ text: String) -> some View {
