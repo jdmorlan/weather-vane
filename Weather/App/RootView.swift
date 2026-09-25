@@ -47,7 +47,7 @@ struct RootView: View {
                 // same string — is actively bad: squeezed against a centred
                 // title it truncates to "Con...", and the sentence it drops is
                 // where "updated 4:02 PM" lives.
-                .navigationSubtitle(subtitle)
+                .modifier(FreshnessSubtitle(weather: models.weather) { subtitle(updated: $0) })
             #if !os(macOS)
                 .navigationBarTitleDisplayMode(.inline)
             #endif
@@ -187,9 +187,9 @@ struct RootView: View {
     /// anything to report, and the freshness of the data once there is. A title
     /// bar is the right home for "how old is this" — it is true of the whole
     /// screen rather than of any card on it.
-    private var subtitle: String {
+    private func subtitle(updated: Date?) -> String {
         if destination.needsStation, !settings.hasWeatherStation { return "No station connected" }
-        if destination == .now, let updated = models.weather.lastUpdated {
+        if destination == .now, let updated {
             return "\(settings.stationLabel) · updated \(updated.formatted(date: .omitted, time: .shortened))"
         }
         return destination.caption
@@ -222,5 +222,22 @@ struct RootView: View {
                       || !settings.hasWeatherStation)
             .help("Refresh")
         }
+    }
+}
+
+/// The subtitle, redrawn when the forecast lands.
+///
+/// A MODIFIER BECAUSE THE ROOT CANNOT SEE THE CHANGE. `RootView` observes
+/// `StationModels`, which publishes nothing of its own; the `WeatherModel`
+/// inside it is where `lastUpdated` moves. So a subtitle computed in the root's
+/// body only refreshed when something else redrew the root — switching
+/// destination — and otherwise sat on the caption or on a stale time. This
+/// observes the weather model itself, so the time moves when the data does.
+private struct FreshnessSubtitle: ViewModifier {
+    @ObservedObject var weather: WeatherModel
+    let text: (Date?) -> String
+
+    func body(content: Content) -> some View {
+        content.navigationSubtitle(text(weather.lastUpdated))
     }
 }
