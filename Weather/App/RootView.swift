@@ -30,6 +30,7 @@ struct RootView: View {
 
     @State private var destination: Destination = .now
     @State private var showingSetup = false
+    @Environment(\.scenePhase) private var scenePhase
     #if !os(macOS)
     /// iPadOS only. On the Mac this state does not exist because the settings
     /// window is the system's to open, not ours. See `WeatherApp`.
@@ -132,6 +133,23 @@ struct RootView: View {
             guard destination == .history, settings.hasWeatherStation else { return }
             await models.loadDayShapes(settings: settings)
         }
+        // THE CONDITIONS KEEP THEMSELVES CURRENT. They used to load once at
+        // launch and then only when the button was pressed, so an iPad left on
+        // Now went quietly stale while its subtitle kept saying when it was last
+        // right. Now: every five minutes while the window is on screen, and on
+        // coming back to it — the phase is in the key, so a return is a fresh
+        // pass. `refreshLive` skips a pass that is under a minute old.
+        //
+        // `.background` and not `!= .active`: on the Mac a window you can see
+        // but are not typing into is `.inactive`, and a dashboard beside your
+        // other work is exactly the one that should keep up.
+        .task(id: "\(scenePhase)|\(settings.tempestToken)|\(settings.tempestStationID)") {
+            guard scenePhase != .background else { return }
+            while !Task.isCancelled {
+                await models.refreshLive(settings: settings)
+                try? await Task.sleep(for: .seconds(300))
+            }
+        }
         // Follows a station being connected mid-session: setup's completion
         // handler starts the fetch, and this catches the Settings-window route
         // to the same state.
@@ -156,7 +174,10 @@ struct RootView: View {
             if settings.hasWeatherStation {
                 WeatherView(models: models, destination: destination,
                             navigate: { destination = $0 },
-                            openSetup: { showingSetup = true })
+                            openSetup: { showingSetup = true },
+                            refresh: {
+                                await models.refresh(settings: settings, includingPattern: false)
+                            })
             } else {
                 needsStation
             }

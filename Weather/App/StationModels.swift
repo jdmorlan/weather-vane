@@ -81,6 +81,20 @@ final class StationModels: ObservableObject {
     /// Today's minutes. Re-read on every refresh, because while it's raining the
     /// card IS the live end of an open spell — but no more often than every five
     /// minutes, which is finer than the answer can change.
+    /// The live half of a refresh — the forecast and today's minutes — for the
+    /// automatic loop in `RootView`. Not the hazards, which poll on their own;
+    /// not the archives, which the day-change task catches up; not the Pattern,
+    /// which is a model run and changes every few hours at best.
+    ///
+    /// Skipped while fresh, so that returning to the app a few seconds after
+    /// leaving it, or a launch racing the loop's first pass, is not a fetch.
+    func refreshLive(settings: AppSettings, ifOlderThan age: TimeInterval = 60) async {
+        guard settings.hasWeatherStation else { return }
+        if let updated = weather.lastUpdated, Date().timeIntervalSince(updated) < age { return }
+        await weather.refresh(token: settings.tempestToken, stationID: settings.tempestStationID)
+        await loadToday(settings: settings)
+    }
+
     func loadToday(settings: AppSettings) async {
         guard let r = weather.report else { return }
         let day = DayKey.string(for: Date(), timeZone: r.timezone ?? .current)

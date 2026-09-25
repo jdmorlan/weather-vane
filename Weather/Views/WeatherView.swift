@@ -26,7 +26,9 @@ final class WeatherModel: ObservableObject {
         .appendingPathComponent("forecasts", isDirectory: true))
 
     func refresh(token: String, stationID: Int) async {
-        guard !token.isEmpty, stationID != 0 else { return }
+        // Not twice at once. The automatic loop, launch and pull-to-refresh can
+        // all ask in the same second; the one already in flight answers them all.
+        guard !token.isEmpty, stationID != 0, !isLoading else { return }
         isLoading = true
         error = nil
         defer { isLoading = false }
@@ -110,10 +112,16 @@ struct WeatherView: View {
     /// that navigation can unmount is a sheet that vanishes mid-flow.
     var openSetup: () -> Void
 
+    /// Pull to refresh on the iPad — the same refresh as the toolbar button,
+    /// asked for with the gesture a finger expects. A no-op on the Mac, where a
+    /// scroll view has no pull; the button is the way in there.
+    var refresh: () async -> Void
+
     init(models: StationModels,
          destination: Destination,
          navigate: @escaping (Destination) -> Void = { _ in },
-         openSetup: @escaping () -> Void = {}) {
+         openSetup: @escaping () -> Void = {},
+         refresh: @escaping () async -> Void = {}) {
         model = models.weather
         archive = models.archive
         samples = models.samples
@@ -125,6 +133,7 @@ struct WeatherView: View {
         self.destination = destination
         self.navigate = navigate
         self.openSetup = openSetup
+        self.refresh = refresh
     }
 
     var body: some View {
@@ -257,6 +266,7 @@ struct WeatherView: View {
             .frame(maxWidth: .infinity)
             }
         }
+        .refreshable { await refresh() }
     }
 
     /// The period surface, held back until the archive can say anything about a
