@@ -32,6 +32,12 @@
 //  something else entirely. The radar loop's rule is that every frame is a
 //  measurement; a raster of model accumulations would quietly break it.
 //
+//  The map DOES have forecast rain now — WPC's totals, in its own Rain totals
+//  view (`Outlooks.swift`). That keeps the rule rather than bending it: it is
+//  contoured bands with an inches key, never under the radar loop, and it is
+//  ONE answer, the forecasters'. This card is the other half — the spread
+//  between models that a single total, however good, cannot show.
+//
 
 import Foundation
 

@@ -58,6 +58,11 @@ enum MapLayerContent {
     case outlines([MapOutline])
     /// One radar's reach and beam-height rings. See `RadarCoverage`.
     case coverage(RadarCoverage)
+    /// Filled forecast areas — an SPC or WPC outlook. See `MapShapes` for why
+    /// they are painted as one group rather than polygon by polygon.
+    case regions(RegionSet)
+    /// Lines with nothing inside them — county boundaries.
+    case boundaries(BoundarySet)
 }
 
 /// A raster field and where its loop currently is.
@@ -115,6 +120,8 @@ struct MapLayer: Identifiable {
     var pins: [MapPin] { if case .pins(let p) = content { return p }; return [] }
     var outlines: [MapOutline] { if case .outlines(let o) = content { return o }; return [] }
     var coverage: RadarCoverage? { if case .coverage(let c) = content { return c }; return nil }
+    var regions: RegionSet? { if case .regions(let r) = content { return r }; return nil }
+    var boundaries: BoundarySet? { if case .boundaries(let b) = content { return b }; return nil }
     var field: FieldLayer? {
         if case .field(let field) = content { return field }
         return nil
@@ -269,6 +276,30 @@ struct MapCanvas: MapViewRepresentable {
             c.installedCoverage = coverage
         }
 
+        // --- Forecast areas (outlooks) ----------------------------------------
+        //
+        // Above roads and under labels, so the town names you place yourself by
+        // stay legible through the fill.
+        let regions = visible.compactMap(\.regions)
+        if c.installedRegions != regions.map(\.id) {
+            for overlay in map.overlays where overlay is RegionOverlay { map.removeOverlay(overlay) }
+            for set in regions { map.addOverlay(RegionOverlay(set), level: .aboveRoads) }
+            c.installedRegions = regions.map(\.id)
+        }
+
+        // --- Boundary lines (counties) ----------------------------------------
+        //
+        // The BOTTOM of the above-labels level: over every field and every
+        // outlook fill, because a line under a raster is a line you cannot see,
+        // but under the warnings and radar rings, which are the things drawn on
+        // purpose for right now.
+        let boundaries = visible.compactMap(\.boundaries)
+        if c.installedBoundaries != boundaries.map(\.id) {
+            for overlay in map.overlays where overlay is BoundaryOverlay { map.removeOverlay(overlay) }
+            for set in boundaries { map.insertOverlay(BoundaryOverlay(set), at: 0, level: .aboveLabels) }
+            c.installedBoundaries = boundaries.map(\.id)
+        }
+
         // --- Fields (radar, satellite, fire) ----------------------------------
         //
         // TWO OVERLAYS PER LAYER, AND NEITHER IS EVER REBUILT TO ANIMATE.
@@ -325,6 +356,8 @@ struct MapCanvas: MapViewRepresentable {
         var installedAreas: [String] = []
         var installedOutlines: [String] = []
         var installedCoverage: RadarCoverage?
+        var installedRegions: [String] = []
+        var installedBoundaries: [String] = []
         /// `layerID|sourceID` per installed field, in draw order. The source id is
         /// in the key because changing a ramp changes the pixels, and the overlay
         /// has to be rebuilt for that even though the layer is "the same" layer.
@@ -562,6 +595,15 @@ struct MapCanvas: MapViewRepresentable {
                 // each source's `process`, and any remaining per-LAYER opacity is
                 // the user's slider, carried on the playhead.
                 return renderer
+            }
+            if let region = overlay as? RegionOverlay {
+                return RegionRenderer(region: region)
+            }
+            if let boundary = overlay as? BoundaryOverlay {
+                // The label colour, so the lines read on the light map and the
+                // dark one. Quiet: they locate the weather, they are not it.
+                let ink = PlatformColor(Color.primary).withAlphaComponent(0.38).cgColor
+                return BoundaryRenderer(boundary: boundary, ink: ink)
             }
             if let polygon = overlay as? HazardPolygon {
                 let renderer = MKPolygonRenderer(polygon: polygon)

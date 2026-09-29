@@ -16,15 +16,29 @@
 //  fields, so switching both on does not layer them, it hides one. A picture
 //  nobody can see is still being fetched, shaded and animated.
 //
-//  So the subject is a single choice. Cloud, radar, fire — you are looking at ONE
-//  of those, and the options that belong to it (which ABI band, burn bans versus
-//  active fires) live underneath it rather than beside it, because they are not
-//  peers of the view, they are refinements of it.
+//  So the subject is a single choice. Storms, excessive rain, rain totals,
+//  radar, cloud, fire — you are looking at ONE of those, and the options that
+//  belong to it (which day, which ABI band, burn bans versus active fires) live
+//  underneath it rather than beside it, because they are not peers of the view,
+//  they are refinements of it.
 //
-//  WHAT STAYS ON REGARDLESS. Warnings and your home are not subjects and never
-//  compete for the same pixels — an outline and a pin composite over anything. So
-//  they are additive, and they are the only two things on this surface that are.
-//  See `MapLayerRole`.
+//  WHY THE FORECASTS ARE VIEWS AND NOT LAYERS. SPC's and WPC's maps are
+//  vectors, not rasters, so nothing technical stops them sitting over the radar.
+//  What stops them is time: the radar is the last hour and a forecast is the
+//  next several days. Painting tomorrow's Slight risk under today's loop makes a
+//  picture that looks like one moment and is two, and invites reading the
+//  storms on it as the ones forecast. So each is a view of its own.
+//
+//  WHY THREE FORECAST VIEWS AND NOT ONE. They answer different questions —
+//  will storms turn severe, will rain turn to flooding, how much rain — and each
+//  has its own sense of time: the two outlooks are one day at a time, rain
+//  totals are a running total out to a week. One "Outlook" view with a product
+//  switch under it hid the choice a level down and made the day picker mean
+//  two different things.
+//
+//  WHAT STAYS ON REGARDLESS. Warnings, counties and your home are not subjects
+//  and never compete for the same pixels — an outline and a pin composite over
+//  anything. So they are additive. See `MapLayerRole`.
 //
 
 import SwiftUI
@@ -34,7 +48,19 @@ import WeatherKit
 /// The map's SUBJECT — exactly one at a time. See the header for why this is a
 /// choice rather than three checkboxes.
 enum MapSurface: String, CaseIterable, Identifiable {
-    case radar, cloud, fire
+    // Looking ahead first, then what is happening now. The map opens on the
+    // first of these; see `surface`.
+    case storms, excessiveRain, rainTotals, radar, cloud, fire
+
+    /// The SPC or WPC product this view draws, for the three forecast views.
+    var forecast: OutlookProduct? {
+        switch self {
+        case .storms:        return .severeStorms
+        case .excessiveRain: return .excessiveRain
+        case .rainTotals:    return .rainTotals
+        case .radar, .cloud, .fire: return nil
+        }
+    }
 
     var id: String { rawValue }
 
@@ -43,6 +69,9 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .radar: return "Radar"
         case .cloud: return "Cloud"
         case .fire:  return "Fire"
+        case .storms:        return "Storms"
+        case .excessiveRain: return "Excessive rain"
+        case .rainTotals:    return "Rain totals"
         }
     }
 
@@ -51,6 +80,9 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .radar: return "cloud.rain"
         case .cloud: return "cloud"
         case .fire:  return "flame"
+        case .storms:        return "cloud.bolt"
+        case .excessiveRain: return "water.waves"
+        case .rainTotals:    return "drop"
         }
     }
 
@@ -68,6 +100,9 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .radar: return "Rain, and where it's headed"
         case .cloud: return "The sky from above"
         case .fire:  return "Bans, and what's burning"
+        case .storms:        return "Where storms may turn severe"
+        case .excessiveRain: return "Where rain may turn to flooding"
+        case .rainTotals:    return "How much rain, out to a week"
         }
     }
 }
@@ -76,17 +111,28 @@ struct MapSurfaceView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var radar = RadarModel()
     @StateObject private var hazards = WeatherHazardModel()
+    @StateObject private var outlooks = OutlookModel()
+    @ObservedObject private var countyLines = CountyLines.shared
 
-    @State private var surface: MapSurface = .radar
+    /// OPENS ON STORMS. The radar answers "where is it right now", which is a
+    /// question you arrive with once you already know something is coming. The
+    /// outlook is how you find out that it is — so it is the first thing the
+    /// map says, and the radar is one tap away when the day comes.
+    @State private var surface: MapSurface = .storms
     /// The layers sheet, on a compact width only. See `controls`.
     @State private var showingLayers = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     #endif
-    /// Additive, and only ever these two. See `MapLayerRole.context`.
-    @State private var context: Set<String> = ["warnings", "home", "coverage"]
+    /// Additive. See `MapLayerRole.context`.
+    @State private var context: Set<String> = ["warnings", "home", "coverage", "counties"]
     @State private var band: SatelliteFieldSource.Band = .infrared
     @State private var fireProduct: TexasFireFieldSource.Product = .burnBan
+    /// The day (or days totalled) chosen under each forecast view, kept per
+    /// view so looking at storms on day 3 does not move rain totals off the
+    /// week. NOT remembered across launches: "day 3" from Friday is Monday's
+    /// day 3 on Saturday. Absent means 1.
+    @State private var forecastPeriods: [OutlookProduct: Int] = [:]
     @State private var focus: MapFocus?
     @State private var focusToken = 0
 
@@ -122,6 +168,8 @@ struct MapSurfaceView: View {
         case .radar: return radarSource
         case .cloud: return satelliteSource
         case .fire:  return fireSource
+        // Vectors, fetched whole: no tiles to count.
+        case .storms, .excessiveRain, .rainTotals: return nil
         }
     }
 
@@ -130,6 +178,7 @@ struct MapSurfaceView: View {
         case .radar: return radar.stampsByUrgency
         case .cloud: return [satelliteStamp]
         case .fire:  return [fireStamp]
+        case .storms, .excessiveRain, .rainTotals: return []
         }
     }
 
@@ -143,6 +192,7 @@ struct MapSurfaceView: View {
         case .radar: return radar.current.map { [$0.stamp] } ?? []
         case .cloud: return [satelliteStamp]
         case .fire:  return [fireStamp]
+        case .storms, .excessiveRain, .rainTotals: return []
         }
     }
 
@@ -192,6 +242,13 @@ struct MapSurfaceView: View {
         .task { await hazards.poll(settings: settings) }
         .task { await refreshStamps() }
         .task { await watchProgress() }
+        .task { await countyLines.load() }
+        // Only while a forecast is on screen — keyed on the choice, so picking
+        // another view or day cancels the old poll and starts the new one.
+        .task(id: "\(surface.rawValue)|\(outlookKey.map { "\($0.period)" } ?? "")") {
+            guard let key = outlookKey else { return }
+            await outlooks.keepCurrent(key)
+        }
         // NEW SCANS NEED FETCHING TOO, and nothing else asks for them. The list
         // reloads every couple of minutes and rotates a fresh stamp in, but the
         // only other prefetch trigger is a GROWING viewport — a map left sitting
@@ -274,6 +331,8 @@ struct MapSurfaceView: View {
             return ["cloud": .init(stampA: satelliteStamp, stampB: satelliteStamp)]
         case .fire:
             return ["fire": .init(stampA: fireStamp, stampB: fireStamp)]
+        case .storms, .excessiveRain, .rainTotals:
+            return [:]
         }
     }
 
@@ -551,6 +610,20 @@ struct MapSurfaceView: View {
             // layer is information rather than clutter.
             caption: outlines.isEmpty ? "none" : "\(outlines.count)"))
 
+        // Counties, on every view. Under the outlook they are how you read which
+        // side of a line you are on; under radar, which county a warning names.
+        if let lines = countyLines.lines {
+            built.append(MapLayer(
+                id: "counties", name: "Counties", symbol: "square.grid.3x3",
+                role: .context, isOn: context.contains("counties"),
+                content: .boundaries(lines), caption: nil))
+        } else {
+            built.append(MapLayer(
+                id: "counties", name: "Counties", symbol: "square.grid.3x3",
+                role: .context, isOn: context.contains("counties"),
+                content: .pins([]), caption: "loading"))
+        }
+
         // What the chosen radar can see. Only under the radar view, and only once
         // a scan has decoded — the rings are read from it.
         if surface == .radar, let coverage = radar.coverage {
@@ -621,7 +694,43 @@ struct MapSurfaceView: View {
                                            playhead: .init(stampA: fireStamp,
                                                            stampB: fireStamp))),
                 caption: "Texas")
+        case .storms, .excessiveRain, .rainTotals:
+            // Nothing to draw until it loads, which the legend says in words.
+            let key = outlookKey
+            guard let key, let regions = outlooks.regions(key) else {
+                return MapLayer(id: surface.rawValue, name: surface.label, symbol: surface.symbol,
+                                role: .subject, isOn: true, content: .pins([]), caption: nil)
+            }
+            return MapLayer(id: surface.rawValue, name: surface.label, symbol: surface.symbol,
+                            role: .subject, isOn: true, content: .regions(regions),
+                            caption: forecastCaption(key.product))
         }
+    }
+
+    private func period(of product: OutlookProduct) -> Int {
+        forecastPeriods[product] ?? 1
+    }
+
+    /// The forecast on screen, or nil under radar, cloud and fire.
+    private var outlookKey: OutlookModel.Key? {
+        surface.forecast.map { OutlookModel.Key(product: $0, period: period(of: $0)) }
+    }
+
+    private var homePoint: GeoPoint? {
+        settings.homeCoordinate.map { GeoPoint(latitude: $0.latitude, longitude: $0.longitude) }
+    }
+
+    /// Home's category in a forecast, said in a word or two — the picker's
+    /// caption, so once a forecast has been fetched its answer is there without
+    /// choosing the view again.
+    private func forecastCaption(_ product: OutlookProduct) -> String? {
+        let key = OutlookModel.Key(product: product, period: period(of: product))
+        guard let outlook = outlooks.outlook(key) else { return nil }
+        guard let home = homePoint else { return product.periodName(key.period) }
+        guard let category = outlook.category(at: home) else {
+            return product == .rainTotals ? "dry" : "none"
+        }
+        return category.name
     }
 
     /// What the radar view can honestly say in one glance. STALE AND REFUSED ARE
@@ -698,6 +807,7 @@ struct MapSurfaceView: View {
                           context: $context,
                           band: $band,
                           fireProduct: $fireProduct,
+                          forecastPeriods: $forecastPeriods,
                           radarSite: $radarSiteChoice,
                           radarMode: $radarModeChoice,
                           home: settings.homeCoordinate,
@@ -715,16 +825,27 @@ struct MapSurfaceView: View {
         if let caption = radarCaption { out[.radar] = caption }
         out[.cloud] = band.label
         out[.fire] = fireProduct.label
+        for view in MapSurface.allCases {
+            if let product = view.forecast, let caption = forecastCaption(product) { out[view] = caption }
+        }
         return out
     }
 
     // MARK: Timeline
 
-    /// Only under the radar view, because it describes that loop and nothing else.
-    /// The other two views are stills and a scrub strip under them would be a
-    /// control for a dimension they do not have.
+    /// The scrub strip only under the radar view, because it describes that loop
+    /// and nothing else — cloud and fire are stills, and a scrub strip under them
+    /// would be a control for a dimension they do not have. The forecasts put
+    /// their legend here instead: it is the thing under that map you read the
+    /// map by.
     @ViewBuilder private var timeline: some View {
-        if surface == .radar, !radar.frames.isEmpty, radar.mode == .sweep {
+        if let key = outlookKey {
+            OutlookLegend(product: key.product, period: key.period,
+                          state: outlooks.state(key),
+                          home: homePoint,
+                          homeCounty: homePoint.flatMap { countyLines.county(containing: $0) },
+                          retry: { Task { await outlooks.load(key, force: true) } })
+        } else if surface == .radar, !radar.frames.isEmpty, radar.mode == .sweep {
             SweepBar(site: radar.site?.id ?? "",
                      shown: radar.frames.first { $0.key == radar.sweepShown },
                      revealing: radar.frames.first { $0.key == radar.sweepRevealing },
@@ -753,6 +874,7 @@ private struct LayerPanel: View {
     @Binding var context: Set<String>
     @Binding var band: SatelliteFieldSource.Band
     @Binding var fireProduct: TexasFireFieldSource.Product
+    @Binding var forecastPeriods: [OutlookProduct: Int]
     @Binding var radarSite: String
     @Binding var radarMode: RadarModel.Mode
     let home: CLLocationCoordinate2D?
@@ -856,6 +978,25 @@ private struct LayerPanel: View {
                 ForEach(TexasFireFieldSource.Product.allCases) { Text($0.label).tag($0) }
             }
             .labelsHidden().pickerStyle(.menu).controlSize(.small)
+        case .storms, .excessiveRain:
+            if let product = surface.forecast {
+                Picker("", selection: period(of: product)) {
+                    ForEach(product.periods, id: \.self) { Text("Day \($0)").tag($0) }
+                }
+                .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                .frame(width: 170)
+            }
+        case .rainTotals:
+            // A running total, so the control says "through": Days 1 through
+            // 5 is the rain from now to the weekend, not day 5's alone.
+            HStack(spacing: 6) {
+                Text("Days 1–").font(.caption).foregroundStyle(.secondary)
+                Picker("", selection: period(of: .rainTotals)) {
+                    ForEach(OutlookProduct.rainTotals.periods, id: \.self) { Text("\($0)").tag($0) }
+                }
+                .labelsHidden().pickerStyle(.segmented).controlSize(.small)
+                .frame(width: 150)
+            }
         case .radar:
             VStack(alignment: .leading, spacing: 6) {
                 RadarSitePicker(choice: $radarSite, home: home)
@@ -868,6 +1009,11 @@ private struct LayerPanel: View {
                 .frame(width: 150)
             }
         }
+    }
+
+    private func period(of product: OutlookProduct) -> Binding<Int> {
+        Binding(get: { forecastPeriods[product] ?? 1 },
+                set: { forecastPeriods[product] = $0 })
     }
 
     private func toggle(_ layer: MapLayer) -> some View {

@@ -323,30 +323,24 @@ extension Hazard {
     }
 }
 
-// MARK: - Decoding the NWS feed
+// MARK: - GeoJSON geometry
 
-/// GeoJSON `FeatureCollection` from `api.weather.gov/alerts/active`.
-public struct NWSAlertFeed: Decodable, Sendable {
-    public var features: [Feature]
+/// A GeoJSON `geometry` object — Polygon or MultiPolygon, which is every shape
+/// an NWS alert, an SPC outlook or a WPC outlook is drawn with. It lived inside
+/// `NWSAlertFeed` until the outlooks needed it; reading SPC's file through a
+/// type named for NWS alerts would have been a generic thing wearing one
+/// product's name. See [[explicit-platform-naming]].
+public struct GeoJSONGeometry: Decodable, Sendable {
+    public var type: String
+    /// Left untyped at the boundary because a GeoJSON `coordinates` array is a
+    /// different depth per geometry type; `shape()` is where it becomes typed.
+    public var coordinates: Nested
 
-    public struct Feature: Decodable, Sendable {
-        public var id: String?
-        public var geometry: Geometry?
-        public var properties: Properties
-    }
-
-    public struct Geometry: Decodable, Sendable {
-        public var type: String
-        /// Left untyped at the boundary because a GeoJSON `coordinates` array is a
-        /// different depth per geometry type; `shape()` is where it becomes typed.
-        public var coordinates: Nested
-
-        public func shape() -> GeoShape? {
-            switch type {
-            case "Polygon":     return coordinates.rings().map { GeoShape.polygon($0) }
-            case "MultiPolygon":return coordinates.polygons().map { GeoShape.multiPolygon($0) }
-            default:            return nil
-            }
+    public func shape() -> GeoShape? {
+        switch type {
+        case "Polygon":     return coordinates.rings().map { GeoShape.polygon($0) }
+        case "MultiPolygon":return coordinates.polygons().map { GeoShape.multiPolygon($0) }
+        default:            return nil
         }
     }
 
@@ -379,6 +373,23 @@ public struct NWSAlertFeed: Decodable, Sendable {
         func rings() -> [[GeoPoint]]? { items?.compactMap { $0.ring() } }
         func polygons() -> [[[GeoPoint]]]? { items?.compactMap { $0.rings() } }
     }
+}
+
+// MARK: - Decoding the NWS feed
+
+/// GeoJSON `FeatureCollection` from `api.weather.gov/alerts/active`.
+public struct NWSAlertFeed: Decodable, Sendable {
+    public var features: [Feature]
+
+    public struct Feature: Decodable, Sendable {
+        public var id: String?
+        public var geometry: Geometry?
+        public var properties: Properties
+    }
+
+    /// The alert's geometry, decoded by the same GeoJSON reader the SPC and WPC
+    /// outlooks use. See `GeoJSONGeometry`.
+    public typealias Geometry = GeoJSONGeometry
 
     public struct Properties: Decodable, Sendable {
         public var id: String?

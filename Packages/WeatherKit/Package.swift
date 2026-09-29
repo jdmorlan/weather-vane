@@ -12,7 +12,9 @@ let package = Package(
         // answers ("muggy", "brief sprinkle at 2pm", "pressure falling, unsettled"). The
         // networking client lives here too, but the INTERPRETATION is dependency-free and
         // verifiable on its own — the reason it's a kit, not view code. No UI.
-        .target(name: "WeatherKit", dependencies: ["RadarKernel"]),
+        .target(name: "WeatherKit", dependencies: ["RadarKernel"],
+                // County outlines for the map. See `CountyBoundaries`.
+                resources: [.copy("Resources/census-counties-5m.json.gz")]),
         // The Level II decoder and tile renderer, split out for ONE reason: to be
         // compiled optimised even in Debug. Their inner loops run a quarter of a
         // million times per tile, and unoptimised they went through Swift's
