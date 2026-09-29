@@ -77,7 +77,7 @@ struct PhoneRoot: View {
                         .toolbar { settingsButton }
                 }
             }
-            Tab(Destination.radar.rawValue, systemImage: Destination.radar.symbol) {
+            Tab(Destination.map.rawValue, systemImage: Destination.map.symbol) {
                 MapSurfaceView()
             }
         }

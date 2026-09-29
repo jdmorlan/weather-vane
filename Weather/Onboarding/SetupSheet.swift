@@ -157,7 +157,7 @@ struct SetupSheet: View {
                 } else {
                     bullet("bolt.fill", "Live conditions, today's shape, and the ten-day")
                 }
-                bullet("antenna.radiowaves.left.and.right", "Radar and NWS warnings — these work without a station")
+                bullet("map", "The weather map, outlooks and NWS warnings — these work without a station")
             }
             .padding(.top, 2)
             // Said up front, so that someone expecting their station to follow
@@ -317,8 +317,8 @@ struct SetupSheet: View {
         VStack(alignment: .leading, spacing: 14) {
             Text(Step.home.title).font(.title2.weight(.semibold))
             Text(model.chosen?.hasLocation == true
-                 ? "Taken from your station. Radar centres here and warnings are matched against it — adjust if the house sits somewhere else."
-                 : "Radar centres here, and NWS warnings are matched against it.")
+                 ? "Taken from your station. The map centres here and warnings are matched against it — adjust if the house sits somewhere else."
+                 : "The map centres here, and NWS warnings are matched against it.")
                 .font(.callout).foregroundStyle(.secondary)
 
             Grid(alignment: .leading, horizontalSpacing: 12, verticalSpacing: 9) {
@@ -338,7 +338,7 @@ struct SetupSheet: View {
             .font(.callout)
 
             if !settings.hasHome {
-                Label("Without this, Radar has nothing to centre on and warnings can't be matched.",
+                Label("Without this, the map has nothing to centre on and warnings can't be matched.",
                       systemImage: "info.circle")
                     .font(.caption).foregroundStyle(.secondary)
             }

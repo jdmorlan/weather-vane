@@ -13,7 +13,7 @@
 //  Radar sat a level above four peers it has no authority over. The argument the
 //  old file made for keeping Map out of the picker — that a map inside a
 //  `ScrollView` is two gestures fighting over one trackpad — is preserved and
-//  strengthened here: Radar is now its own column, not a card in a scroll.
+//  strengthened here: the map (then Radar) is its own column, not a card in a scroll.
 //
 //  WHAT MOVED UP — the eight models and every long-lived `.task`. A destination
 //  that unmounts must not take the forecast, the hazard poll or the archive
@@ -160,7 +160,7 @@ struct RootView: View {
 
     @ViewBuilder private var detail: some View {
         switch destination {
-        case .radar:
+        case .map:
             MapSurfaceView()
         case .pattern:
             UpperAirSurface(model: models.upperAir) { showingSetup = true }
@@ -198,7 +198,7 @@ struct RootView: View {
         } actions: {
             Button("Connect a station") { showingSetup = true }
                 .buttonStyle(.borderedProminent)
-            Button("See the radar instead") { destination = .radar }
+            Button("See the map instead") { destination = .map }
                 .buttonStyle(.link)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

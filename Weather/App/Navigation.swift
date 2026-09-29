@@ -9,14 +9,16 @@
 //  registers had to be a control INSIDE it. Standing alone, the nesting has
 //  nothing left to justify it and two things against it — the picker scrolled
 //  away with the cards under it, so on History the way back was off-screen; and
-//  Radar, which is a peer of Now by every measure, sat a level above four views
+//  the map, which is a peer of Now by every measure, sat a level above four views
 //  it has no authority over.
 //
 //  WHY GROUPED, AND BY WHAT — by the oldest distinction in the subject: CLIMATE
 //  is what you expect, WEATHER is what you get, and the record is what you got.
 //
-//    TODAY    a moment. Now is this second at the station; Radar is this second
-//             over the county. Both stop being true in ten minutes.
+//    TODAY    a moment, and the days it leads into. Now is this second at the
+//             station and its ten-day; Map is this second over the county —
+//             radar, satellite, fire — and the storms, flooding and rain the
+//             forecasters see coming. All of it stops being true within hours.
 //    CLIMATE  what this place usually does. Rhythms is when things happen here;
 //             Rain is how much and how often; Wind is where it comes from and
 //             when that turns. None of them takes a date — they're the shape
@@ -34,16 +36,24 @@
 //             one asks whether the station is worth reading. Last, and grouped
 //             alone, because you go there when you already suspect something.
 //
-//  Radar sits under TODAY rather than beside Pattern because a user reaching for
-//  it is asking "is it about to rain on me", which is a question about now. That
-//  it happens to be drawn on a map is a fact about the renderer.
+//  Map sits under TODAY rather than beside Pattern because a user reaching for
+//  it is asking "is something coming at me", which is a question about now and
+//  the next few days.
+//
+//  WHY "MAP" AND NOT "RADAR". It was Radar while the radar was most of it, and
+//  the old note here said the map was only a fact about the renderer. That
+//  stopped being true: the destination now holds six views — storm and flood
+//  outlooks, rain totals, radar, cloud, fire — and what they have in common is
+//  not any one source but that each is a picture of the area AROUND you, the
+//  axis every other destination lacks. "Radar" had become a generic-sounding
+//  name quietly meaning one of its six. See [[explicit-platform-naming]].
 //
 
 import SwiftUI
 
 enum Destination: String, CaseIterable, Identifiable, Hashable {
     case now = "Now"
-    case radar = "Radar"
+    case map = "Map"
     case rhythms = "Rhythms"
     case rain = "Rain"
     case history = "History"
@@ -57,7 +67,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .now:     return "cloud.sun"
-        case .radar:   return "antenna.radiowaves.left.and.right"
+        case .map:     return "map"
         case .rhythms: return "repeat"
         case .rain:    return "drop"
         case .history: return "calendar"
@@ -74,7 +84,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .now:     return "Right Now"
-        case .radar:   return "Radar"
+        case .map:     return "Weather Map"
         case .rhythms: return "Rhythms"
         case .rain:    return "Rain"
         case .history: return "History"
@@ -91,7 +101,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var caption: String {
         switch self {
         case .now:     return "Conditions, today's shape, and the ten-day"
-        case .radar:   return "What's coming, and any warning over it"
+        case .map:     return "What's around you, and what's on the way"
         case .rhythms: return "When things usually happen here"
         case .rain:    return "How much falls, how often, and how long between"
         case .history: return "A month, a season, or the whole record"
@@ -112,7 +122,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
 
         var destinations: [Destination] {
             switch self {
-            case .today:   return [.now, .radar]
+            case .today:   return [.now, .map]
             case .climate: return [.rhythms, .rain, .wind]
             case .record:  return [.history, .explore]
             case .beyond:  return [.pattern]
@@ -123,14 +133,14 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
 
     /// Whether this destination can say anything at all without a Tempest token.
     ///
-    /// Two of nine can, and that is the whole reason setup is skippable: Radar
+    /// Two of nine can, and that is the whole reason setup is skippable: Map
     /// and Pattern need only a home point, and the app is genuinely useful
     /// before you have found your token. The sidebar dims the rest rather than
     /// hiding them — a destination that vanishes reads as a missing feature,
     /// where a dim one with a reason reads as something you have yet to do.
     var needsStation: Bool {
         switch self {
-        case .radar, .pattern: return false
+        case .map, .pattern: return false
         case .now, .rhythms, .rain, .history, .wind, .explore, .station: return true
         }
     }

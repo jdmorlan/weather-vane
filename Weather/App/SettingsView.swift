@@ -78,7 +78,7 @@ struct SettingsView: View {
                         .labelsHidden()
                         .multilineTextAlignment(.trailing)
                 }
-                Text("Radar centres here, and NWS warnings are matched against it.")
+                Text("The map centres here, and NWS warnings and outlooks are matched against it.")
                     .font(.caption).foregroundStyle(.secondary)
             }
 
