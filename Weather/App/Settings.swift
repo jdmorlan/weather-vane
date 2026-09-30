@@ -184,63 +184,7 @@ final class AppSettings: ObservableObject {
         }
     }
 
-    /// Bring the settings across from the bundle id this app used to have.
-    ///
-    /// WHY THERE IS ANYTHING TO BRING. `UserDefaults` is keyed by bundle id, so
-    /// renaming `jdm-solutions.weather` to `jdmorlan.vane.mac` pointed the app at
-    /// an empty domain — a configured install would have come up asking for a
-    /// token it already had. `SettingsSync` covers most of that once iCloud is
-    /// provisioned, but not all of it: `homeFacing` and `hasSeenSetup` are
-    /// deliberately not carried between devices, so nothing but this would bring
-    /// them back. It also means the rename does not DEPEND on iCloud being set
-    /// up first, which it otherwise would.
-    ///
-    /// ONLY MACOS. It is the only target whose id changed after it had ever run;
-    /// the iOS and tvOS apps were named before they shipped, so there is no
-    /// older domain for them to read.
-    ///
-    /// AND FROM THE REAL APP, INTO VANE DEV. Debug builds are a separate app
-    /// with their own id (`jdmorlan.vane.mac.dev`, see project.yml), so the same
-    /// empty-domain problem happens every time a Mac first runs Vane Dev. The
-    /// installed Vane is the better source when it is there — it is the setup in
-    /// use today — and the pre-rename domain is still the fallback behind it.
-    ///
-    /// Reading another domain works because this app is not sandboxed (see
-    /// `Weather.entitlements`). Non-destructive, like the archive migration
-    /// above it: it copies and never clears the old domain, so a bad outcome is
-    /// recoverable by pointing a build back at the old id.
-    private static func migrateLegacyDefaults(into defaults: UserDefaults) {
-        #if os(macOS)
-        let flag = "didMigrateLegacyDefaults"
-        guard !defaults.bool(forKey: flag) else { return }
-        defer { defaults.set(true, forKey: flag) }
-
-        var sources = ["jdm-solutions.weather"]
-        if Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true {
-            sources.insert("jdmorlan.vane.mac", at: 0)
-        }
-
-        // A domain that already has a token is one that has been set up under
-        // the new id — by sync, or by hand. Never overwrite that. Of the
-        // sources, the first one that was ever set up wins, whole.
-        guard (defaults.string(forKey: "tempestToken") ?? "").isEmpty,
-              let legacy = sources.lazy
-                .compactMap({ UserDefaults(suiteName: $0) })
-                .first(where: { !($0.string(forKey: "tempestToken") ?? "").isEmpty })
-        else { return }
-
-        for key in ["homeLat", "homeLon", "homeFacing", "tempestToken",
-                    "tempestStationID", "stationName", "hasSeenSetup",
-                    "stationUpdatedAt", "homeUpdatedAt"] {
-            if let value = legacy.object(forKey: key) {
-                defaults.set(value, forKey: key)
-            }
-        }
-        #endif
-    }
-
     init() {
-        Self.migrateLegacyDefaults(into: defaults)
         homeLat = defaults.double(forKey: "homeLat")
         homeLon = defaults.double(forKey: "homeLon")
         homeFacing = defaults.object(forKey: "homeFacing") as? Double ?? -1
@@ -253,25 +197,21 @@ final class AppSettings: ObservableObject {
 
 /// Where the archive lives.
 ///
-/// A GROUP CONTAINER, not Application Support. The type has been called
-/// `AppGroup` since the extraction and was not one — it pointed at
-/// `~/Library/Application Support/Almanac`, which is another app's folder and is
-/// readable by exactly one process. Nothing else could ever have opened it: not
-/// a widget, not a Shortcuts extension, not a future phone or TV target. The
-/// name was a promise about a direction, and this is it being kept.
+/// THE GROUP CONTAINER ON THE MAC, so Vane and Vane Dev (the Debug build, a
+/// separate app) read one archive — and `ArchiveFileLock` keeps them from
+/// writing the same file at once. The group is reachable from inside the App
+/// Sandbox, which is what let the Mac app be sandboxed at all.
 ///
-/// WHY IT'S SAFE TO MOVE NOW. The original comment argued against forking the
-/// archive because the station has years of one-minute samples on disk and two
-/// apps would end up with two different pasts. That argument was about ALMANAC
-/// still writing here. It isn't: everything of Almanac's in that folder last
-/// changed in July, while `Weather/` changed today. Vane is the only writer, so
-/// relocating its subtree splits nothing.
+/// APPLICATION SUPPORT EVERYWHERE ELSE. The iOS app claims no group (see
+/// project.yml), so `containerURL(for:)` is nil there and the archive lives in
+/// the app's own sandbox — the right home until a widget needs to share it.
 ///
-/// THE FALLBACK IS THE WHOLE DESIGN. `containerURL(for:)` returns nil when the
-/// entitlement isn't in the signed profile, which is a normal thing to happen on
-/// a machine that hasn't provisioned the capability. Rather than fail or invent
-/// a path, it uses the legacy directory exactly as before — the app keeps
-/// working and the move simply hasn't happened yet.
+/// THE FALLBACK FOLDER IS STILL CALLED `Almanac`, and that is a pointer, not a
+/// name. It is where the iPhone and iPad archives already are; renaming it would
+/// strand them. Nothing here reads Almanac's own files any more: the Mac archive
+/// moved into the group container in September 2026 and the one-time move was
+/// removed when the Mac app was sandboxed, since a sandboxed app cannot see the
+/// old folder anyway.
 enum AppGroup {
     /// macOS requires the team id as a prefix; iOS and tvOS do not. Same suffix
     /// on all three so a phone or TV target later addresses the same group.
@@ -283,9 +223,9 @@ enum AppGroup {
         #endif
     }()
 
-    /// Where the archive lived before the group container: Almanac's folder.
-    /// Kept as the fallback, and as the source the migration reads from.
-    static var legacyDirectory: URL {
+    /// Where the archive lives when there is no group container. See above for
+    /// why the folder keeps its old name.
+    static var fallbackDirectory: URL {
         let fm = FileManager.default
         let base = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
             ?? fm.urls(for: .documentDirectory, in: .userDomainMask)[0]
@@ -303,29 +243,9 @@ enum AppGroup {
     private static func resolve() -> URL {
         let fm = FileManager.default
         guard let container = fm.containerURL(forSecurityApplicationGroupIdentifier: identifier) else {
-            return legacyDirectory
+            return fallbackDirectory
         }
         try? fm.createDirectory(at: container, withIntermediateDirectories: true)
-        migrateWeatherSubtree(into: container)
         return container
-    }
-
-    /// Bring `Weather/` across, and ONLY `Weather/`.
-    ///
-    /// The rest of that folder — `articles.json`, `Favicons`, `vault-path` — is
-    /// Almanac's and none of Vane's business; dragging it into Vane's container
-    /// would be taking someone else's files because they happened to be nearby.
-    ///
-    /// THE WORK IS IN `ArchiveRelocation`, IN THE KIT, and that move is the real
-    /// fix. This was a private function taking one URL, which made it impossible
-    /// to test — and it was wrong for months without anyone noticing, because it
-    /// guarded on whether `Weather/` EXISTED rather than whether the archive was
-    /// in it. The archive stores create that folder themselves on first write,
-    /// so one failed copy latched the app onto an empty archive permanently.
-    /// It now has seven tests, including that exact case.
-    private static func migrateWeatherSubtree(into container: URL) {
-        ArchiveRelocation.migrate(
-            from: legacyDirectory.appendingPathComponent("Weather", isDirectory: true),
-            to: container.appendingPathComponent("Weather", isDirectory: true))
     }
 }

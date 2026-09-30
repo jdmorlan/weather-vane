@@ -2,26 +2,33 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
-	<!-- Not sandboxed, deliberately and for now. The archive is read and written
-	     through AppGroup.dataDirectory, which prefers the group container below
-	     and falls back to ~/Library/Application Support/Almanac when the
-	     entitlement isn't in the signed profile. -->
+	<!-- SANDBOXED, since 30 September 2026. It was not at first because the app
+	     was lifted out of Almanac and still read its archive from Almanac's own
+	     folder, which a sandboxed app cannot see. Once the archive lived in the
+	     group container below, nothing was left that needed the freedom: Vane
+	     reads no file the person did not hand it, runs no other program, loads
+	     no outside code and drives no other app. Sandboxed, the Mac joins the
+	     same App Store record as the iPhone, iPad and TV, and updates through
+	     TestFlight like them. -->
+	<key>com.apple.security.app-sandbox</key>
+	<true/>
+	<!-- WeatherFlow, the NWS, Open-Meteo, NEXRAD and the map tiles. -->
+	<key>com.apple.security.network.client</key>
+	<true/>
 	<!-- ONE STORE FOR ALL THREE APPS, and it has to be spelled out. The default
 	     for this key is $(TeamIdentifierPrefix)$(CFBundleIdentifier), and the
-	     three targets have three different bundle ids — so accepting the default
-	     gives each app a private store it is the only member of, which looks
-	     exactly like working until you check a second device. Pinned to one
-	     literal, the Mac, the iPad and the Apple TV are in the same store. -->
+	     apps have not always shared a bundle id — so accepting the default gives
+	     each app a private store it is the only member of, which looks exactly
+	     like working until you check a second device. Pinned to one literal, the
+	     Mac, the iPad and the Apple TV are in the same store. -->
 	<key>com.apple.developer.ubiquity-kvstore-identifier</key>
 	<string>CG68B3UD28.jdmorlan.vane</string>
 	<!-- STILL `jdm-solutions`, DELIBERATELY, while the bundle ids moved to
 	     `jdmorlan`. This string is not a name, it is a POINTER: it is what
 	     `AppGroup.resolve` hands to containerURL(for:), and the thing on the
 	     other end holds four years of one-minute samples. Renaming it would
-	     return a fresh empty directory and put the archive behind a second
-	     migration for no user-visible gain — nobody ever sees a group id. The
-	     bundle ids had to be fixed before TestFlight makes them permanent; this
-	     one is invisible plumbing already pointing at real data. -->
+	     return a fresh empty directory. Nobody ever sees a group id. It is also
+	     how Vane and Vane Dev share one archive on a Mac. -->
 	<key>com.apple.security.application-groups</key>
 	<array>
 		<string>CG68B3UD28.group.jdm-solutions.vane</string>

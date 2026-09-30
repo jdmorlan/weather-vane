@@ -27,20 +27,21 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Vane
-        # RENAMED, and the old comment here argued against exactly this. It said
-        # UserDefaults is keyed by bundle id — token, station, home, facing — so
-        # a rename silently resets a configured app to first-run for a cosmetic
-        # win. That was correct when the win WAS cosmetic and nothing carried the
-        # setup. Two things changed: these ids are about to be permanent (App
-        # Store Connect does not let you rename or reuse one, so the last moment
-        # to fix `.weather` — a generic word, for the flagship app, that does
-        # not even say Vane — is before TestFlight), and `SettingsSync` now
-        # carries station and home between devices. What the rename actually
-        # costs is `homeFacing` and `hasSeenSetup`, which deliberately do not
-        # sync — and `AppSettings.migrateLegacyDefaults` brings those across
-        # once. The archive was never at risk: it is reached through the app
-        # group, which is not keyed by bundle id.
-        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.mac
+        # THE iOS APP'S ID, since the Mac app was sandboxed (see
+        # Weather.entitlements). App Store Connect adds a platform to an existing
+        # record only when the build carries the same bundle id, so this is what
+        # makes the Mac part of the one Vane — with the iPhone, iPad and TV, in
+        # one TestFlight — rather than a second listing that would need a name
+        # other than Vane. It was `jdmorlan.vane.mac` while the Mac shipped
+        # notarized outside the store; that id never reached App Store Connect,
+        # so moving off it cost nothing there.
+        #
+        # What it costs on the Mac: a sandboxed app keeps its settings in its own
+        # container, so the first launch starts fresh. `SettingsSync` brings the
+        # station and home back from iCloud and `SetupSheet` says so; which way
+        # the house faces is asked once. The archive is untouched — it is reached
+        # through the app group, which is keyed by neither.
+        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios
         DEVELOPMENT_TEAM: CG68B3UD28
         SWIFT_VERSION: "5.0"
         ENABLE_HARDENED_RUNTIME: YES
@@ -75,13 +76,13 @@ targets:
       # a literal in the entitlements, not by bundle id, so Vane Dev finds the
       # station and home already set. On the Mac the archive is reached through
       # the app group, also not keyed by bundle id, so both read one past — and
-      # `ArchiveFileLock` keeps the two from writing the same file at once. What
-      # does not sync, `AppSettings.migrateLegacyDefaults` copies across once.
+      # `ArchiveFileLock` keeps the two from writing the same file at once.
+      # Which way the house faces does not sync, so Vane Dev asks for it once.
       #
       # Release is untouched, so TestFlight and App Store ids stay what they are.
       configs:
         Debug:
-          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.mac.dev
+          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios.dev
           # The Mac shows PRODUCT_NAME in the menu bar and Activity Monitor, not
           # just the display name — both have to say Dev.
           PRODUCT_NAME: Vane Dev
@@ -109,7 +110,7 @@ targets:
         # Distinct from the Mac app's. Nothing migrates between them — the
         # archive on an iPad is filled from WeatherFlow, not copied off a Mac —
         # so the reason to keep the Mac id frozen does not apply here.
-        # VaneTV carries this same id, deliberately — see there.
+        # The Mac app and VaneTV carry this same id, deliberately — see VaneTV.
         PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios
         DEVELOPMENT_TEAM: CG68B3UD28
         CODE_SIGN_ENTITLEMENTS: Weather/VaneiOS.entitlements
