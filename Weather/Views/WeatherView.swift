@@ -268,7 +268,7 @@ struct WeatherView: View {
                 // Their own views, reached from the sidebar. Listed rather than
                 // defaulted so that adding another destination is a compile
                 // error here instead of a blank screen.
-                case .map, .pattern, .station:
+                case .map, .pattern, .videos, .station:
                     EmptyView()
                 }
 

@@ -16,11 +16,14 @@ import SwiftUI
 @main
 struct WeatherApp: App {
     @StateObject private var settings = AppSettings()
+    /// The forecaster video playing, if any. See `VideoPlayer`.
+    @StateObject private var playback = VideoPlayback()
 
     var body: some Scene {
         WindowGroup {
             root
                 .environmentObject(settings)
+                .environmentObject(playback)
             #if os(macOS)
                 // Wider than the old two-tab window: the sidebar takes ~190pt
                 // and the cards were already laid out to 1180.

@@ -1,7 +1,7 @@
 //
 //  RootView.swift  (Weather)
 //
-//  The window: a source list of six destinations, and the detail column they
+//  The window: a source list of destinations, and the detail column they
 //  drive. Also the one place that stays mounted for the whole session, which is
 //  why the persistent work lives here rather than on any destination.
 //
@@ -27,6 +27,12 @@ import WeatherKit
 struct RootView: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var models = StationModels()
+    /// Not one of `StationModels`: nothing in it reads the station. On the root
+    /// for the same reason they are — the live check has to keep running
+    /// whichever destination is open, or the sidebar's LIVE badge would only
+    /// ever appear on the page it points to.
+    @StateObject private var forecasters = ForecasterModel()
+    @EnvironmentObject private var playback: VideoPlayback
 
     @State private var destination: Destination = .now
     @State private var showingSetup = false
@@ -39,7 +45,7 @@ struct RootView: View {
 
     var body: some View {
         NavigationSplitView {
-            Sidebar(selection: $destination) { showingSetup = true }
+            Sidebar(selection: $destination, badges: badges) { showingSetup = true }
         } detail: {
             detail
                 .navigationTitle(destination.title)
@@ -54,6 +60,9 @@ struct RootView: View {
             #endif
                 .toolbar { toolbar }
         }
+        // Over the whole split view, not the detail column, so the video keeps
+        // playing as you move between destinations — the radar, typically.
+        .overlay { FloatingPlayer(playback: playback) }
         // Presented from the root rather than from a destination: setup is about
         // the app, and a sheet owned by a view that navigation can unmount is a
         // sheet that vanishes mid-flow.
@@ -90,6 +99,7 @@ struct RootView: View {
         // issued while you're reading the ten-day has to arrive without you
         // asking, and it must not stop because you switched to Wind.
         .task { await models.hazards.poll(settings: settings) }
+        .task { await forecasters.poll() }
         // On the root for the same reason as the hazard poll: a new model run
         // landing while you are reading History should be there when you go back
         // to Rain, not start loading when you arrive.
@@ -162,6 +172,8 @@ struct RootView: View {
         switch destination {
         case .map:
             MapSurfaceView()
+        case .videos:
+            ForecasterView(model: forecasters)
         case .pattern:
             UpperAirSurface(model: models.upperAir) { showingSetup = true }
         case .station:
@@ -182,6 +194,12 @@ struct RootView: View {
                 needsStation
             }
         }
+    }
+
+    private var badges: [Destination: Text] {
+        var out: [Destination: Text] = [:]
+        if !forecasters.stormStreams.isEmpty { out[.videos] = Text("LIVE").foregroundStyle(.red) }
+        return out
     }
 
     /// What a station-shaped destination says when there is no station.
@@ -235,12 +253,13 @@ struct RootView: View {
                     // Asked for explicitly while looking at it, though, "refresh"
                     // has to mean the thing on screen.
                     if destination == .station { await models.health.refresh(settings: settings) }
+                    if destination == .videos { await forecasters.refresh() }
                 }
             } label: {
                 Image(systemName: "arrow.clockwise")
             }
             .disabled(models.weather.isLoading || models.upperAir.isLoading
-                      || !settings.hasWeatherStation)
+                      || (!settings.hasWeatherStation && destination.needsStation))
             .help("Refresh")
         }
     }

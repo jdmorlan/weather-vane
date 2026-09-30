@@ -1,7 +1,8 @@
 //
 //  StormSurface.swift  (tvOS)
 //
-//  The window: three tabs — Now, Forecast, Map — and the warning above them.
+//  The window: four tabs — Now, Forecast, Map, Videos — and the warning above
+//  them.
 //
 //  WHAT THIS REPLACED, THREE TIMES. First a full-bleed radar with a conditions
 //  strip, which made the thing you check every thirty seconds the smallest item
@@ -12,10 +13,11 @@
 //  undid it: every tile was one measure, and a measure alone is a fact with its
 //  meaning a press away. The deck had become a list of sensors, not answers.
 //
-//  THREE SECTIONS, BY THE QUESTION ASKED. They are the Mac app's TODAY group
-//  exactly — what is happening, what is coming, what is around you — which is
-//  what the television was for all along. Everything about the record stayed on
-//  the Mac because a remote is a terrible instrument for asking questions.
+//  THREE SECTIONS, BY THE QUESTION ASKED, and the forecasters beside them.
+//  The three are the Mac app's TODAY group exactly — what is happening, what
+//  is coming, what is around you — which is what the television was for all
+//  along. Everything about the record stayed on the Mac because a remote is a
+//  terrible instrument for asking questions.
 //
 //    NOW       one composed screen: the temperature, the interpreter's
 //              headline, the readings, and the next twelve hours.
@@ -27,14 +29,17 @@
 //  focus on tvOS; a `TabView` is the one top-level control the focus engine
 //  was built around, and swiping up from any page reaches it.
 //
-//  THE WARNING SITS OVER ALL THREE. Being told something is coming for you must
+//    VIDEOS    two forecasters' newest videos and live storm coverage, which
+//              open in the YouTube app. See `VideosTab`.
+//
+//  THE WARNING SITS OVER ALL OF THEM. Being told something is coming for you must
 //  never depend on which tab you left the TV on.
 //
 
 import SwiftUI
 import WeatherKit
 
-enum TVTab: Hashable { case now, forecast, map }
+enum TVTab: Hashable { case now, forecast, map, videos }
 
 struct StormSurface: View {
     @EnvironmentObject private var settings: TVSettings
@@ -46,6 +51,7 @@ struct StormSurface: View {
     @StateObject private var storms = StormOutlookModel()
     @StateObject private var rainTotals = TVRainTotalsModel()
     @StateObject private var lines = TVBoundaries()
+    @StateObject private var forecasters = ForecasterModel()
 
     @State private var tab: TVTab = .now
     /// Owned here rather than inside the map tab so the range survives leaving
@@ -78,6 +84,14 @@ struct StormSurface: View {
                 MapTab(radar: radar, storms: storms, totals: rainTotals, hasHome: settings.hasHome,
                        home: settings.homePoint,
                        range: $range, layer: $layer, day: $outlookDay)
+            }
+            // A forecaster on the air with a storm, said in the tab's own name
+            // so it can be seen from any tab. In the name because tvOS tab bars
+            // take no badge.
+            Tab(forecasters.stormStreams.isEmpty ? "Videos" : "Videos · LIVE",
+                systemImage: "play.rectangle", value: .videos) {
+                VideosTab(model: forecasters)
+                    .background(Color.black)
             }
         }
         // Behind the tabs, always mounted. See `MapTab.swift` for the
@@ -120,6 +134,9 @@ struct StormSurface: View {
         .task { await hazards.poll(point: settings.homePoint) }
         // On the surface, not the tab, so the outlooks are in before you look.
         .task { await storms.keepCurrent() }
+        // On the surface, not the tab, so the LIVE badge appears without
+        // anyone opening Videos first.
+        .task { await forecasters.poll() }
         .task(id: settings.homeLat) { await lines.load(home: settings.homePoint) }
         #if DEBUG
         // A soak test for memory: `-VaneSoak YES` walks every range on the map,

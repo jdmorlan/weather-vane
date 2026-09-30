@@ -180,6 +180,9 @@ targets:
       # The outlook areas as ONE overlay, as on the Mac. One MapKit polygon per
       # shape took a seven-day rain total — thousands of rings — to 1.5 GB.
       - Weather/Views/MapShapes.swift
+      # The forecasters' feeds and live check. The list is drawn by the TV's
+      # own `VideosTab`; only the model is shared.
+      - Weather/Views/ForecasterModel.swift
     dependencies:
       - package: WeatherKit
     settings:

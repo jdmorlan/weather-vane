@@ -1,7 +1,7 @@
 //
 //  Navigation.swift  (Weather)
 //
-//  Six destinations, all peers.
+//  The destinations, all peers.
 //
 //  WHAT THIS REPLACES — two tabs (Weather, Map) with a five-way segmented picker
 //  buried inside the first one's `ScrollView`. That shape was inherited: Weather
@@ -32,6 +32,10 @@
 //             a question asked over everything.
 //    BEYOND   not this acre at all — the wave upstairs that steers it, from a
 //             model run rather than the station.
+//    FORECASTERS  other people, reading the same sky: two YouTube channels'
+//             newest videos, and their storm coverage while it is on the air.
+//             Not the app's own view of anything, which is why it is a group
+//             of its own rather than a corner of Map.
 //    STATION  none of the above: the instrument rather than the weather. It sits
 //             apart because it is the only destination whose subject is the app's
 //             own source of truth — everything above reads the station, and this
@@ -63,6 +67,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     case wind = "Wind"
     case explore = "Explore"
     case pattern = "Pattern"
+    case videos = "Videos"
     case station = "Station"
 
     var id: String { rawValue }
@@ -78,6 +83,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .wind:    return "wind"
         case .explore: return "magnifyingglass"
         case .pattern: return "globe.americas"
+        case .videos:  return "play.rectangle"
         case .station: return "gauge.with.dots.needle.bottom.50percent"
         }
     }
@@ -96,6 +102,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .wind:    return "Wind"
         case .explore: return "Explore"
         case .pattern: return "Upper Air"
+        case .videos:  return "Forecasters"
         case .station: return "Station Health"
         }
     }
@@ -114,6 +121,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .wind:    return "Where it comes from, and when that turns"
         case .explore: return "The days when anything happened"
         case .pattern: return "The 500 mb wave that steers all of it"
+        case .videos:  return "Texas Weather Center and Convective Chronicles"
         case .station: return "Whether the instrument itself is well"
         }
     }
@@ -123,6 +131,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case climate = "Climate"
         case record = "The Record"
         case beyond = "Beyond"
+        case forecasters = "Forecasters"
         case equipment = "The Station"
         var id: String { rawValue }
 
@@ -132,6 +141,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
             case .climate: return [.rhythms, .rain, .wind]
             case .record:  return [.history, .explore]
             case .beyond:  return [.pattern]
+            case .forecasters: return [.videos]
             case .equipment: return [.station]
             }
         }
@@ -146,7 +156,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     /// where a dim one with a reason reads as something you have yet to do.
     var needsStation: Bool {
         switch self {
-        case .map, .pattern: return false
+        case .map, .pattern, .videos: return false
         case .now, .forecast, .rhythms, .rain, .history, .wind, .explore, .station: return true
         }
     }
@@ -157,6 +167,9 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
 struct Sidebar: View {
     @Binding var selection: Destination
     @EnvironmentObject private var settings: AppSettings
+    /// What a row has waiting that is worth knowing before you go there: LIVE
+    /// on Videos when a forecaster is on the air with a storm.
+    var badges: [Destination: Text] = [:]
     /// Opens setup. Passed in rather than toggling a binding here because the
     /// sheet belongs to the window, not to the source list.
     var onSetUp: () -> Void
@@ -188,6 +201,7 @@ struct Sidebar: View {
     @ViewBuilder private func row(_ destination: Destination) -> some View {
         let blocked = destination.needsStation && !settings.hasWeatherStation
         Label(destination.rawValue, systemImage: destination.symbol)
+            .badge(badges[destination])
             .tag(destination)
             // Not `.disabled`: a disabled row in a `List(selection:)` can't be
             // selected, and the screen behind it is the one place that explains
