@@ -7,7 +7,7 @@ ANALYSIS := analysis
 NOTEBOOK := notebooks/00-one-day.ipynb
 
 .DEFAULT_GOAL := help
-.PHONY: help notebook lab sync clean-cache generate version
+.PHONY: help notebook lab sync clean-cache generate version release release-ios release-tv release-mac
 
 help: ## List the targets
 	@echo "Vane"
@@ -41,6 +41,20 @@ generate: ## Regenerate Vane.xcodeproj from project.yml
 # This is for reading it off beforehand, or matching a TestFlight build to a commit.
 version: ## Show the build number the next build will stamp
 	@Scripts/stamp-build-number.sh --print
+
+# The real apps, shipped. Everything lives in Scripts/release.sh; these only
+# save remembering its arguments. Add ARGS=--no-upload to sign without sending.
+release: ## Ship all three: iPhone/iPad + TV to TestFlight, Mac to /Applications
+	Scripts/release.sh all $(ARGS)
+
+release-ios: ## iPhone and iPad → TestFlight
+	Scripts/release.sh ios $(ARGS)
+
+release-tv: ## Apple TV → TestFlight
+	Scripts/release.sh tv $(ARGS)
+
+release-mac: ## Mac → notarized by Apple → /Applications
+	Scripts/release.sh mac $(ARGS)
 
 # A missing `uv` is the one failure here with a non-obvious fix, so say the fix
 # rather than letting make print "command not found" and stop.
