@@ -192,7 +192,7 @@ final class PrecipOutlookTests: XCTestCase {
           "precipitation_ecmwf_ifs025":[0.00,0.06,0.06],
           "precipitation_ncep_hrrr_conus":[0.00,0.00,0.00],
           "precipitation_icon_seamless":[0.00,0.00,null],
-          "precipitation_gfs_seamless":[0.00,0.00,0.00]}}
+          "precipitation_ncep_gfs013":[0.00,0.00,0.00]}}
         """.data(using: .utf8)!
 
         let outlook = try PrecipOutlookClient.decode(json)

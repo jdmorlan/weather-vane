@@ -102,13 +102,20 @@ public enum PrecipModel: String, CaseIterable, Identifiable, Sendable {
     }
 
     /// Open-Meteo's name for it.
+    ///
+    /// GFS IS ASKED FOR BY ITS OWN NAME, NOT `gfs_seamless`. Over CONUS the
+    /// seamless series fills its short range with HRRR: on 30 September its 18
+    /// hours matched the HRRR row value for value. That counted one model twice
+    /// (the thing KNMI/DMI were dropped for) and hid the real GFS, which had
+    /// overnight rain that HRRR did not. `ncep_gfs025` has no surface
+    /// precipitation, so it is the 0.11° run.
     var apiName: String {
         switch self {
         case .nbm:    return "ncep_nbm_conus"
         case .hrrr:   return "ncep_hrrr_conus"
         case .ecmwf:  return "ecmwf_ifs025"
         case .ukmo:   return "ukmo_seamless"
-        case .gfs:    return "gfs_seamless"
+        case .gfs:    return "ncep_gfs013"
         case .icon:   return "icon_seamless"
         case .gem:    return "gem_seamless"
         case .arpege: return "meteofrance_seamless"
