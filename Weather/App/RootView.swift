@@ -211,7 +211,7 @@ struct RootView: View {
     private func subtitle(updated: Date?) -> String {
         if destination.needsStation, !settings.hasWeatherStation { return "No station connected" }
         if destination == .now, let updated {
-            return "\(settings.stationLabel) · updated \(updated.formatted(date: .omitted, time: .shortened))"
+            return "\(settings.stationLabel) · updated \(When.moment(updated))"
         }
         return destination.caption
     }

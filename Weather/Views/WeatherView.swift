@@ -248,7 +248,8 @@ struct WeatherView: View {
                     // The grade rides along, one line, where it changes how the
                     // numbers under it are read — and its Detail is the working,
                     // under History.
-                    ForecastPage(report: r, storms: storms, precip: precip.outlook,
+                    ForecastPage(report: r, forecastFetched: model.lastUpdated,
+                                 storms: storms, precip: precip.outlook,
                                  home: settings.homePoint, openSetup: openSetup) {
                         forecastGrade(detail: .history)
                     }

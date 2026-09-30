@@ -338,7 +338,7 @@ struct RightNowCard: View {
         // Short of that the day still has room to get there, so the forecast is
         // the more honest number and it says so.
         if let observed, forecast.map({ isHigh ? observed.value >= $0 : observed.value <= $0 }) ?? true {
-            return ("\(Int(observed.value.rounded()))° at \(StationClock.time(observed.date, r))", true)
+            return ("\(Int(observed.value.rounded()))° at \(StationClock.moment(observed.date, r))", true)
         }
         if let forecast { return ("\(Int(forecast.rounded()))° expected", false) }
         return observed.map { ("\(Int($0.value.rounded()))°", true) }
@@ -501,5 +501,17 @@ enum StationClock {
         f.locale = Locale(identifier: "en_US")
         f.dateFormat = "h:mm a"
         return f.string(from: d)
+    }
+
+    /// With its day, in the station's zone: "yesterday 11:50 PM".
+    static func moment(_ d: Date, _ r: WeatherReport) -> String {
+        When.moment(d, calendar: calendar(r))
+    }
+
+    static func calendar(_ r: WeatherReport) -> Calendar {
+        var c = Calendar(identifier: .gregorian)
+        c.timeZone = r.timezone ?? .current
+        c.locale = Locale(identifier: "en_US")
+        return c
     }
 }

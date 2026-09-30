@@ -101,7 +101,7 @@ struct PrecipOutlookCard: View {
             VStack(alignment: .leading, spacing: 10) {
                 Text("No home location set")
                     .font(.callout.weight(.medium))
-                Text("These five models answer about a point on the map, not about your station. Setup finds it from the station you connect, or you can place it yourself.")
+                Text("These eleven models answer about a point on the map, not about your station. Setup finds it from the station you connect, or you can place it yourself.")
                     .font(.caption).foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
                 if let onSetUpHome {
@@ -180,11 +180,12 @@ struct PrecipOutlookCard: View {
 
     private func modelRow(_ row: PrecipOutlook.Row, outlook: PrecipOutlook) -> some View {
         HStack(spacing: 8) {
+            let stamp = outlook.stamp(row.model)
             Text(row.model.label)
                 .font(.system(size: 10).monospaced())
                 .foregroundStyle(row.isWet ? .primary : .secondary)
                 .frame(width: 52, alignment: .leading)
-                .help(row.model.note)
+                .help("\(row.model.note)\n\(stamp.line())")
 
             HStack(spacing: 2) {
                 ForEach(Array(row.inches.enumerated()), id: \.offset) { hour, value in
@@ -200,6 +201,31 @@ struct PrecipOutlookCard: View {
                 .font(.system(size: 10).monospacedDigit())
                 .foregroundStyle(row.isWet ? .primary : .tertiary)
                 .frame(width: 46, alignment: .trailing)
+
+            // WHICH RUN, ON EVERY ROW. The models do not keep time together —
+            // two rerun hourly, the globals every six hours and land hours
+            // apart — so "4 of 11" is a vote between forecasts that knew
+            // different things. NEXT is an estimate: this run's arrival plus
+            // the model's cadence.
+            Text(runLabel(stamp))
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(.tertiary)
+                .frame(width: Self.runWidth, alignment: .leading)
+                .help(stamp.line())
+            Text(stamp.next.map { When.moment($0) } ?? "—")
+                .font(.system(size: 9).monospacedDigit())
+                .foregroundStyle(.quaternary)
+                .frame(width: Self.runWidth, alignment: .leading)
+                .help(stamp.nextPhrase() ?? "No schedule to estimate from")
+        }
+    }
+
+    private static let runWidth: CGFloat = 92
+
+    private func runLabel(_ stamp: SourceStamp) -> String {
+        switch stamp.made {
+        case .run(let d): return When.moment(d)
+        default:          return "not published"
         }
     }
 
@@ -217,8 +243,8 @@ struct PrecipOutlookCard: View {
                     // stay aligned to the columns they name.
                     ZStack(alignment: .leading) {
                         Color.clear
-                        if i % 6 == 0 {
-                            Text(WeatherAlmanac.clock(Calendar.current.component(.hour, from: time)))
+                        if let label = axisLabel(outlook.times, i) {
+                            Text(label)
                                 .font(.system(size: 9))
                                 .foregroundStyle(.tertiary)
                                 .fixedSize()
@@ -228,8 +254,30 @@ struct PrecipOutlookCard: View {
                 }
             }
             Spacer().frame(width: 46)
+            Text("RUN")
+                .font(.system(size: 9, weight: .semibold)).tracking(0.6)
+                .foregroundStyle(.tertiary)
+                .frame(width: Self.runWidth, alignment: .leading)
+            Text("NEXT, EST.")
+                .font(.system(size: 9, weight: .semibold)).tracking(0.6)
+                .foregroundStyle(.tertiary)
+                .frame(width: Self.runWidth, alignment: .leading)
         }
         .frame(height: 11)
+    }
+
+    /// Every six hours, plus the column where the day turns over — named, so
+    /// "2am" past midnight can't be read as this morning's. A six-hourly tick
+    /// within three columns of the day mark gives way to it.
+    private func axisLabel(_ times: [Date], _ i: Int) -> String? {
+        let calendar = Calendar.current
+        func isMidnight(_ j: Int) -> Bool {
+            times.indices.contains(j) && calendar.component(.hour, from: times[j]) == 0
+        }
+        if i > 0, isMidnight(i) { return When.day(times[i]) }
+        guard i % 6 == 0 else { return nil }
+        if (1...3).contains(where: { isMidnight(i + $0) || (i - $0 > 0 && isMidnight(i - $0)) }) { return nil }
+        return WeatherAlmanac.clock(calendar.component(.hour, from: times[i]))
     }
 
     private func cell(_ inches: Double?, time: Date?, model: PrecipModel) -> some View {
@@ -251,7 +299,7 @@ struct PrecipOutlookCard: View {
     }
 
     private func tooltip(_ inches: Double?, time: Date?, model: PrecipModel) -> String {
-        let when = time.map { $0.formatted(date: .omitted, time: .shortened) } ?? "—"
+        let when = time.map { When.moment($0) } ?? "—"
         guard let inches else { return "\(model.label) · \(when) — doesn't run this far" }
         return inches >= PrecipOutlook.measurable
             ? "\(model.label) · \(when) — \(WeatherAlmanac.inches(inches))"
@@ -288,7 +336,7 @@ struct PrecipOutlookCard: View {
                 Text("\(WeatherAlmanac.inches(0.25))/hr").font(.system(size: 9)).foregroundStyle(.tertiary)
             }
             Spacer()
-            Text(PrecipOutlookClient.credit)
+            Text("\(PrecipOutlookClient.credit) · fetched \(When.moment(outlook.fetched))")
                 .font(.system(size: 9))
                 .foregroundStyle(.tertiary)
         }

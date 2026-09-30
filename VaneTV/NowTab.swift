@@ -66,6 +66,10 @@ struct NowTab: View {
                         Text("·").foregroundStyle(.tertiary)
                         Text("Sunset \(Self.time(set))")
                     }
+                    // When the station last reported — with its day, so a
+                    // screen left on overnight can't pass yesterday off as now.
+                    Text("·").foregroundStyle(.tertiary)
+                    Text("as of \(When.moment(r.asOf))")
                 }
                 .font(.system(size: 28))
                 .foregroundStyle(.secondary)

@@ -192,8 +192,8 @@ struct OutlookLegend: View {
         }
     }
 
-    /// "Tue 8 AM – Wed 7 AM", in local time. The offices write their windows in
-    /// UTC, which is correct and useless at the kitchen table.
+    /// "today 8 AM – tomorrow 7 AM", in local time. The offices write their
+    /// windows in UTC, which is correct and useless at the kitchen table.
     private var window: String? {
         let outlook: Outlook?
         switch state {
@@ -202,8 +202,7 @@ struct OutlookLegend: View {
         case .loading: outlook = nil
         }
         guard let from = outlook?.validFrom, let until = outlook?.validUntil else { return nil }
-        let style = Date.FormatStyle().weekday(.abbreviated).hour()
-        return "\(from.formatted(style)) – \(until.formatted(style))"
+        return When.range(from, until)
     }
 
     @ViewBuilder private func content(_ outlook: Outlook) -> some View {
@@ -221,6 +220,9 @@ struct OutlookLegend: View {
             swatches(outlook)
         }
         explanation
+        // Issued when, and when the office is due to reissue.
+        Text(outlook.stamp.line())
+            .font(.caption2).foregroundStyle(.tertiary)
     }
 
     /// WHERE YOU ARE FIRST. The map shows the country; this says which colour

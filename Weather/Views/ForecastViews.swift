@@ -30,6 +30,9 @@ import WeatherKit
 
 struct ForecastPage<Grade: View>: View {
     let report: WeatherReport
+    /// When the station's forecast was fetched — WeatherFlow says nothing
+    /// about when it made it, so this is the only time there is to give.
+    var forecastFetched: Date?
     @ObservedObject var storms: StormOutlookModel
     let precip: PrecipOutlook?
     let home: GeoPoint?
@@ -91,8 +94,42 @@ struct ForecastPage<Grade: View>: View {
                     }
                 }
             }
+
+            sources
         }
         .task { await storms.keepCurrent() }
+    }
+
+    /// WHERE EACH PART OF THE PAGE CAME FROM, AND HOW OLD IT IS. Not teaching —
+    /// just the dates, so a forecast read at 1 AM says whose, and from when.
+    private var sources: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(stationLine)
+            if let precip {
+                Text(modelLine(precip))
+            }
+            ForEach(storms.sourceLines(), id: \.self) { Text($0) }
+        }
+        .font(.caption2).foregroundStyle(.tertiary)
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var stationLine: String {
+        let fetched = forecastFetched.map { " · fetched \(When.moment($0))" } ?? ""
+        return "Temperature, rain and wind: WeatherFlow's forecast for the station\(fetched) · WeatherFlow doesn't publish when it was made"
+    }
+
+    /// The spread shading the first eighteen hours comes from eleven runs of
+    /// different ages; the newest and oldest bound them.
+    private func modelLine(_ precip: PrecipOutlook) -> String {
+        let runs = precip.runs.filter { $0.value.isPlausible() }.map(\.value.initialised)
+        var line = "Model agreement, first 18 hours: eleven models via Open-Meteo · fetched \(When.moment(precip.fetched))"
+        if let newest = runs.max(), let oldest = runs.min() {
+            line += newest == oldest
+                ? " · all run \(When.moment(newest))"
+                : " · runs from \(When.moment(oldest)) to \(When.moment(newest))"
+        }
+        return line
     }
 }
 
@@ -240,7 +277,6 @@ private struct StormDays: View {
             Label("No severe storms or flooding expected through \(days.last?.weekday ?? "the weekend").",
                   systemImage: "checkmark.circle")
                 .font(.callout).foregroundStyle(.secondary)
-            footer
         } else {
             VStack(alignment: .leading, spacing: 14) {
                 ForEach(Array(days.enumerated()), id: \.element.id) { i, d in
@@ -248,7 +284,6 @@ private struct StormDays: View {
                         day(ForecastDayTitle.title(index: i, day: d), risk)
                     }
                 }
-                footer
             }
         }
     }
@@ -284,13 +319,6 @@ private struct StormDays: View {
                 }
                 .font(.callout)
             }
-        }
-    }
-
-    @ViewBuilder private var footer: some View {
-        if let fetched = model.fetched {
-            Text("SPC convective and WPC excessive-rain outlooks at home · checked \(fetched.formatted(date: .omitted, time: .shortened))")
-                .font(.caption2).foregroundStyle(.tertiary)
         }
     }
 

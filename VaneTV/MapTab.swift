@@ -298,10 +298,10 @@ struct MapTab: View {
                         }
                     }
                 }
-                if let issued = outlook.issued {
-                    Text("\(outlook.product.issuer) · issued \(issued.formatted(date: .omitted, time: .shortened))")
-                        .font(.system(size: 18)).foregroundStyle(.tertiary)
-                }
+                // Issued, and when the office is due to reissue — both with
+                // their day, so 6 PM read at 1 AM says it was yesterday's.
+                Text(outlook.stamp.line())
+                    .font(.system(size: 18)).foregroundStyle(.tertiary)
             } else if layer == .rainTotals {
                 if let failure = totals.failure, !totals.loading.contains(day) {
                     Text("Couldn't load the rain totals: \(failure)").foregroundStyle(.secondary)
@@ -381,7 +381,7 @@ struct MapTab: View {
                          ? "Loading scans · \(radar.scansReady) of \(radar.frames.count)"
                          : RadarAge.describe(current.time))
                         .font(.system(size: 28, weight: .medium))
-                    Text(current.time, format: .dateTime.hour().minute())
+                    Text(When.moment(current.time))
                         .font(.system(size: 19).monospacedDigit())
                         .foregroundStyle(.secondary)
                 }

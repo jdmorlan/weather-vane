@@ -54,7 +54,7 @@ struct PhoneNowView: View {
     private var subtitle: String {
         guard settings.hasWeatherStation else { return "No station connected" }
         if let updated = weather.lastUpdated {
-            return "\(settings.stationLabel) · updated \(updated.formatted(date: .omitted, time: .shortened))"
+            return "\(settings.stationLabel) · updated \(When.moment(updated))"
         }
         return Destination.now.caption
     }

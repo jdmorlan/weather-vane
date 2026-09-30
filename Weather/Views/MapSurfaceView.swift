@@ -683,8 +683,11 @@ struct MapSurfaceView: View {
                                            playhead: .init(stampA: satelliteStamp,
                                                            stampB: satelliteStamp))),
                 // "daylight" because the visible band is night-blind, and a black
-                // screen at midnight would otherwise read as clear sky.
-                caption: band.isNightBlind ? "daylight" : nil)
+                // screen at midnight would otherwise read as clear sky. The time
+                // is when the tiles were asked for: the service serves only its
+                // newest image and never says when that was taken.
+                caption: (band.isNightBlind ? "daylight · " : "")
+                    + "fetched \(When.moment(Self.bucketStart(satelliteStamp, seconds: 300)))")
         case .fire:
             return MapLayer(
                 id: "fire", name: "Fire", symbol: surface.symbol,
@@ -693,7 +696,7 @@ struct MapSurfaceView: View {
                                            stamps: [fireStamp],
                                            playhead: .init(stampA: fireStamp,
                                                            stampB: fireStamp))),
-                caption: "Texas")
+                caption: "Texas · fetched \(When.moment(Self.bucketStart(fireStamp, seconds: 3600)))")
         case .storms, .excessiveRain, .rainTotals:
             // Nothing to draw until it loads, which the legend says in words.
             let key = outlookKey
@@ -736,13 +739,17 @@ struct MapSurfaceView: View {
     /// What the radar view can honestly say in one glance. STALE AND REFUSED ARE
     /// DIFFERENT SENTENCES: the index can be perfect and every tile refused, and a
     /// loop whose newest frame is old is not a picture of now.
+    /// The start of a field's cache bucket — when its current tiles were asked
+    /// for. See `SatelliteFieldSource.currentStamp`.
+    private static func bucketStart(_ stamp: String, seconds: Int) -> Date {
+        Date(timeIntervalSince1970: TimeInterval((Int(stamp) ?? 0) * seconds))
+    }
+
     private var radarCaption: String? {
         if radar.failure != nil { return "unavailable" }
         if radar.tilesRefused { return "tiles refused" }
         if radar.isStale { return "stale" }
-        return radar.frames.last.map {
-            $0.time.formatted(date: .omitted, time: .shortened)
-        } ?? "—"
+        return radar.frames.last.map { When.moment($0.time) } ?? "—"
     }
 
     private func warningOutlines() -> [MapOutline] {

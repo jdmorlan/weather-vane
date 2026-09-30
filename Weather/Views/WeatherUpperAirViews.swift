@@ -30,6 +30,10 @@ final class UpperAirModel: ObservableObject {
     @Published private(set) var showingFallback = false
     @Published var frameIndex = 0
     @Published var reference: WaveReference = .zonal
+    /// Open-Meteo's description of the newest GFS run — its arrival time and
+    /// cadence are what date the NEXT one. Nil until the metadata has been
+    /// read this session; the footer falls back to the run's own estimate.
+    @Published private(set) var newest: ModelRun?
 
     /// The last valid frame index, or 0 when there is no run.
     var lastFrame: Int { max((run?.frames.count ?? 1) - 1, 0) }
@@ -84,7 +88,9 @@ final class UpperAirModel: ObservableObject {
         lastCheck = now
         let client = UpperAirClient(grid: grid, home: home)
         do {
-            let latest = try await client.latestRun()
+            let meta = try await ModelRunClient().run("ncep_gfs025")
+            newest = meta
+            let latest = meta.initialised
             if let run, run.initialized >= latest {
                 error = nil; fallback = nil; showingFallback = false
                 return
@@ -315,7 +321,7 @@ struct UpperAirPatternView: View {
                             home: home, reference: model.reference)
             }
 
-            Text("\(UpperAirClient.credit) · fetched \(run.fetched.formatted(date: .abbreviated, time: .shortened))")
+            Text(sourceLine(run))
                 .font(.caption).foregroundStyle(.tertiary)
         }
         // STEPPING IS THE PRIMARY WAY THROUGH THE DAYS; play is the secondary one.
@@ -336,6 +342,16 @@ struct UpperAirPatternView: View {
         // A segmented picker eats ← and → itself — they'd flip the reference
         // instead of the day — so focus comes straight back after choosing one.
         .onChange(of: model.reference) { _, _ in focus = .page }
+    }
+
+    /// Which run, when the next is expected, and when this copy was fetched.
+    /// The next run is dated from Open-Meteo's own arrival times when they've
+    /// been read, and from the run's cautious estimate otherwise.
+    private func sourceLine(_ run: UpperAirRun) -> String {
+        let next = model.newest.map { $0.initialised == run.initialized ? $0.nextAvailable : run.nextRunPossible }
+            ?? run.nextRunPossible
+        let stamp = SourceStamp(source: UpperAirClient.credit, made: .run(run.initialized), next: next)
+        return "\(stamp.line()) · fetched \(When.moment(run.fetched))"
     }
 
     private func header(_ run: UpperAirRun, _ frame: UpperAirFrame) -> some View {

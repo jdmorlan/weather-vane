@@ -198,9 +198,19 @@ public struct PrecipOutlook: Equatable, Sendable {
     public let rows: [Row]
     /// When the numbers were fetched, so the card can say how old they are.
     public let fetched: Date
+    /// Each model's run, keyed by the model. A model missing here still has
+    /// its row; it just can't say which run it is.
+    public var runs: [PrecipModel: ModelRun]
 
-    public init(times: [Date], rows: [Row], fetched: Date = Date()) {
-        self.times = times; self.rows = rows; self.fetched = fetched
+    public init(times: [Date], rows: [Row], fetched: Date = Date(),
+                runs: [PrecipModel: ModelRun] = [:]) {
+        self.times = times; self.rows = rows; self.fetched = fetched; self.runs = runs
+    }
+
+    /// Which run of `model` this row is, and when the next one lands.
+    public func stamp(_ model: PrecipModel, now: Date = Date()) -> SourceStamp {
+        guard let run = runs[model] else { return SourceStamp(source: model.label, made: .unpublished) }
+        return run.stamp(source: model.label, now: now)
     }
 
     // MARK: Reading the spread
@@ -249,13 +259,17 @@ public struct PrecipOutlook: Equatable, Sendable {
     }
 
     /// How much and roughly when, or nil when nothing has rain.
-    public var detail: String? {
+    public var detail: String? { detail() }
+
+    /// The onset carries its day — eighteen hours reaches past midnight, and
+    /// "from around 3am" read at 10 PM should not leave anyone counting.
+    public func detail(now: Date = Date(), calendar: Calendar = .current) -> String? {
         guard let range = wetRange else { return nil }
         let amount = range.low == range.high
             ? WeatherAlmanac.inches(range.high)
             : "\(WeatherAlmanac.inches(range.low))–\(WeatherAlmanac.inches(range.high))"
         guard let onset else { return amount }
-        return "\(amount) · from around \(WeatherAlmanac.clock(Calendar.current.component(.hour, from: onset)))"
+        return "\(amount) · from around \(When.moment(onset, now: now, calendar: calendar))"
     }
 
     /// The model most out of step with the rest — named because "who is the odd
@@ -280,7 +294,7 @@ public struct PrecipOutlook: Equatable, Sendable {
 // MARK: - Fetching it
 
 public struct PrecipOutlookClient: Sendable {
-    public static let credit = "NBM, ECMWF, HRRR, ICON, GFS via Open-Meteo"
+    public static let credit = "All eleven via Open-Meteo"
 
     /// Eighteen hours, because that is as far as HRRR runs. Past it the card
     /// would be comparing four models against a blank column and calling the gap
@@ -322,12 +336,18 @@ public struct PrecipOutlookClient: Sendable {
             .init(name: "timezone", value: "UTC"),
         ]
 
+        // The runs are asked alongside, never instead: a failed metadata file
+        // costs a row its run time, not the card its forecast.
+        async let runs = ModelRunClient(session: session).runs(PrecipModel.allCases.map(\.metaName))
         let (data, response) = try await session.data(from: components.url!)
         let status = (response as? HTTPURLResponse)?.statusCode ?? 0
         guard (200..<300).contains(status) else { throw Failure.badResponse(status: status) }
 
         do {
-            return try Self.decode(data)
+            var outlook = try Self.decode(data)
+            let byName = await runs
+            for model in PrecipModel.allCases { outlook.runs[model] = byName[model.metaName] }
+            return outlook
         } catch let failure as Failure {
             throw failure
         } catch {

@@ -401,11 +401,10 @@ struct StationHealthView: View {
     /// in the reader's zone when the station is in another is a number that
     /// looks right and is off by hours.
     private func clock(_ date: Date) -> String {
-        let f = DateFormatter()
-        f.timeZone = model.health?.timeZone ?? .current
-        f.locale = Locale(identifier: "en_US")
-        f.dateFormat = "h:mm a"
-        return f.string(from: date)
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = model.health?.timeZone ?? .current
+        calendar.locale = Locale(identifier: "en_US")
+        return When.moment(date, calendar: calendar)
     }
 
     /// Coarsest grain that's still true — this is read as prose, not compared.

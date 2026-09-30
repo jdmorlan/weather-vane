@@ -18,9 +18,10 @@
 //  strip is left off here — eighteen hours of a subtle strip, one more feed for
 //  the TV to poll, and nothing you could read from the sofa.
 //
-//  NO SOURCES LINE. The Mac says which offices and when it checked; here the
-//  screen has no room to spare for it, and on this page sources are only
-//  inputs to what is drawn. A day with no outlook still says so on its tile.
+//  SOURCES AT THE FOOT, SMALL. Every source in the app says when it was made
+//  and when the next is due, so an outlook read at 1 AM says it was
+//  yesterday's. Here that is a few quiet lines in the space under the figure,
+//  not a panel. A day with no outlook still says so on its tile.
 //
 //  NOTHING IS FOCUSABLE, as on Now: every answer is already on the screen.
 //
@@ -70,6 +71,11 @@ struct ForecastTab: View {
                                  risks: risks, scale: 1.45, textScale: 2)
             }
             Spacer(minLength: 0)
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Forecast: WeatherFlow, for the station · current as of \(When.moment(r.asOf))")
+                ForEach(storms.sourceLines(), id: \.self) { Text($0) }
+            }
+            .font(.system(size: 18)).foregroundStyle(.tertiary)
         }
         // Clear of the tab bar and the warning beside it, which float over
         // the page rather than pushing it down. On top of the safe area's own

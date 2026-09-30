@@ -31,8 +31,11 @@ struct HazardBannerTV: View {
             Text(hazard.event.uppercased())
                 .font(.system(size: 28, weight: .heavy)).tracking(0.5)
                 .lineLimit(1)
-            if let until = hazard.expires {
-                Text("until \(until.formatted(date: .omitted, time: .shortened))")
+            // ALWAYS WITH ITS DAY. This once read "until 7:00 AM" for a flood
+            // watch that ran into the day after tomorrow.
+            let timing = hazard.timing()
+            if !timing.isEmpty {
+                Text(timing)
                     .font(.system(size: 22, weight: .medium)).opacity(0.85)
                     .lineLimit(1)
             }

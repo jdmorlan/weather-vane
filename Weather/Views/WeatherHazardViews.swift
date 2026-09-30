@@ -159,6 +159,12 @@ private struct HazardRow: View {
                         .buttonStyle(.link).font(.caption)
                 }
             }
+
+            // Who issued it and when NWS will say more. For a long watch the
+            // statement is reissued well before the watch ends, and that time is
+            // worth knowing on its own: it is when this banner may change.
+            Text(hazard.stamp.line())
+                .font(.caption2).foregroundStyle(.tertiary)
         }
         .padding(.horizontal, 12).padding(.vertical, 9)
         .frame(maxWidth: .infinity, alignment: .leading)

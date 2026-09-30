@@ -83,6 +83,29 @@ final class StormOutlookModel: ObservableObject {
         }
     }
 
+    /// The page's source lines: each office's product, every day's issue time,
+    /// and the soonest reissue among them — "SPC storm outlook · day 1 issued
+    /// today 8 AM, day 2 today 1 AM, day 3 today 2:30 AM · next expected today
+    /// 11:30 AM". Days are issued on different schedules, so one time would
+    /// be wrong for two of them.
+    func sourceLines(now: Date = Date()) -> [String] {
+        func line(_ name: String, _ outlooks: [Outlook]) -> String? {
+            let sorted = outlooks.sorted { $0.period < $1.period }
+            guard !sorted.isEmpty else { return nil }
+            let issued = sorted.map { o in
+                "day \(o.period) " + (o.issued.map { "issued \(When.moment($0, now: now))" } ?? "issue time not given")
+            }
+            var parts = [name, issued.joined(separator: ", ")]
+            if let next = sorted.compactMap(\.stamp.next).min() {
+                parts.append(next > now ? "next expected \(When.moment(next, now: now))"
+                                        : "a newer one was due \(When.moment(next, now: now))")
+            }
+            return parts.joined(separator: " · ")
+        }
+        return [line("SPC storm outlook", categorical),
+                line("WPC excessive rainfall outlook", flood)].compactMap { $0 }
+    }
+
     /// One day's risk at home, or nil when nothing covering that day has
     /// loaded — which is not the same as a quiet day, and must not read as one.
     func risk(day: String, home: GeoPoint, timeZone: TimeZone) -> StormRisk? {

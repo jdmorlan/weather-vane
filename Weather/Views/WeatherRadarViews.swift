@@ -155,7 +155,7 @@ struct RadarScrubBar: View {
     /// reading a value off.
     private var ends: some View {
         HStack(spacing: 0) {
-            Text(loop.first?.time ?? Date(), format: .dateTime.hour().minute())
+            Text(When.moment(loop.first?.time ?? Date()))
             Spacer(minLength: 4)
             Text("newest")
         }
@@ -171,7 +171,7 @@ struct RadarScrubBar: View {
     /// what the old extrapolated frames were trying to paper over.
     @ViewBuilder private var readout: some View {
         VStack(alignment: .trailing, spacing: 1) {
-            Text(current?.time ?? Date(), format: .dateTime.hour().minute())
+            Text(When.moment(current?.time ?? Date()))
                 .font(.callout).monospacedDigit()
             if let current {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
@@ -181,7 +181,7 @@ struct RadarScrubBar: View {
                 }
             }
         }
-        .frame(minWidth: 62, alignment: .trailing)
+        .frame(minWidth: 110, alignment: .trailing)
     }
 
     private func age(of time: Date, at now: Date) -> String {
@@ -220,7 +220,7 @@ struct SweepBar: View {
             if let frame = revealing ?? shown {
                 TimelineView(.periodic(from: .now, by: 30)) { context in
                     VStack(alignment: .trailing, spacing: 1) {
-                        Text(frame.time, format: .dateTime.hour().minute())
+                        Text(When.moment(frame.time))
                             .font(.callout).monospacedDigit()
                         Text(age(of: frame.time, at: context.date))
                             .font(.caption2).foregroundStyle(.secondary)

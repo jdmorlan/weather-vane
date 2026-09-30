@@ -46,6 +46,8 @@ struct HourlyRibbon: View {
     private let hasWind: Bool
     private let nowIndex: Double?         // fractional position of "right now"
     private let localHours: [Int]
+    /// The station's calendar, so the hover can name the hour's day.
+    private let calendar: Calendar
 
     @State private var hover: Int?
 
@@ -62,6 +64,7 @@ struct HourlyRibbon: View {
         // evening. Local midnight is the only day boundary that means anything here.
         let days = dates.map { Int(cal.startOfDay(for: $0).timeIntervalSince1970) }
         self.localHours = clockHours
+        self.calendar = cal
 
         // Bands
         let weekday = DateFormatter()
@@ -484,7 +487,10 @@ struct HourlyRibbon: View {
                        with: .color(.white.opacity(0.9)), lineWidth: 1.5)
         }
 
-        var parts = [h.clock.uppercased()]
+        // WITH ITS DAY: the strip runs past midnight, and "2AM" under the
+        // cursor shouldn't leave anyone working out which one.
+        let date = Date(timeIntervalSince1970: TimeInterval(h.epoch))
+        var parts = ["\(When.day(date, calendar: calendar)) \(h.clock)".uppercased()]
         if let t = h.temperature { parts.append("\(Int(t.rounded()))°") }
         if let d = h.dewPoint { parts.append("dew \(Int(d.rounded()))°") }
         // A measured hour has no chance left in it, only an amount.

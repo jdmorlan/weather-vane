@@ -181,6 +181,14 @@ public struct Hazard: Codable, Equatable, Sendable, Identifiable {
     /// When it applies. `ends` where NWS gives one, `expires` otherwise.
     public var onset: Date?
     public var expires: Date?
+    /// When NWS sent this version of the product.
+    public var sent: Date?
+    /// When NWS says this STATEMENT runs out — which, for a long watch, is
+    /// not when the watch ends but when the office will reissue it. Kept
+    /// apart from `expires` because the two were once conflated in a way that
+    /// made a two-day flood watch read as ending at the afternoon update.
+    /// Nil when it is the same moment as the end.
+    public var nextStatement: Date?
     /// The plain-language halves, when the product carries them. A watch usually
     /// carries both; a statement often carries neither.
     public var headline: String?
@@ -198,6 +206,7 @@ public struct Hazard: Codable, Equatable, Sendable, Identifiable {
     public init(id: String, event: String, kind: HazardKind, tier: HazardTier,
                 resolution: HazardResolution, level: Double,
                 onset: Date? = nil, expires: Date? = nil,
+                sent: Date? = nil, nextStatement: Date? = nil,
                 headline: String? = nil, instruction: String? = nil,
                 areaDesc: String? = nil, senderName: String? = nil,
                 shape: GeoShape? = nil) {
@@ -209,6 +218,8 @@ public struct Hazard: Codable, Equatable, Sendable, Identifiable {
         self.level = level
         self.onset = onset
         self.expires = expires
+        self.sent = sent
+        self.nextStatement = nextStatement
         self.headline = headline
         self.instruction = instruction
         self.areaDesc = areaDesc
@@ -221,35 +232,25 @@ public struct Hazard: Codable, Equatable, Sendable, Identifiable {
         return true
     }
 
-    /// "until 10:00 PM" · "4:00 PM to 10:00 PM" · "" when NWS bounded neither end.
-    /// A hazard whose window we can't state is still a hazard — the phrase goes
-    /// empty rather than the hazard going missing.
+    /// "until tomorrow 7 AM" · "today 1 PM – tomorrow 7 AM" · "" when NWS
+    /// bounded neither end. EVERY END CARRIES ITS DAY: a flood watch that runs
+    /// into Thursday must never print as a same-day window. A hazard whose
+    /// window we can't state is still a hazard — the phrase goes empty rather
+    /// than the hazard going missing.
     public func timing(now: Date = Date(), calendar: Calendar = .current) -> String {
-        let formatter = DateFormatter()
-        formatter.calendar = calendar
-        formatter.timeZone = calendar.timeZone
-        formatter.dateFormat = "h:mm a"
-        let sameDay: (Date) -> Bool = { calendar.isDate($0, inSameDayAs: now) }
-        func stamp(_ d: Date) -> String {
-            sameDay(d) ? formatter.string(from: d)
-                       : DateFormatter.hazardDayTime(calendar: calendar).string(from: d)
-        }
         switch (onset, expires) {
-        case let (o?, e?) where o > now: return "\(stamp(o)) to \(stamp(e))"
-        case let (_, e?): return "until \(stamp(e))"
-        case let (o?, nil) where o > now: return "from \(stamp(o))"
+        case let (o?, e?) where o > now: return When.range(o, e, now: now, calendar: calendar)
+        case let (_, e?): return "until \(When.moment(e, now: now, calendar: calendar))"
+        case let (o?, nil) where o > now: return "from \(When.moment(o, now: now, calendar: calendar))"
         default: return ""
         }
     }
-}
 
-extension DateFormatter {
-    static func hazardDayTime(calendar: Calendar) -> DateFormatter {
-        let f = DateFormatter()
-        f.calendar = calendar
-        f.timeZone = calendar.timeZone
-        f.dateFormat = "EEE h:mm a"
-        return f
+    /// "Fort Worth TX · issued today 8:23 AM · next expected today 4:30 PM".
+    public var stamp: SourceStamp {
+        SourceStamp(source: senderName ?? "NWS",
+                    made: sent.map { .issued($0) } ?? .unpublished,
+                    next: nextStatement)
     }
 }
 
@@ -413,6 +414,7 @@ public struct NWSAlertFeed: Decodable, Sendable {
         public var messageType: String?
         public var onset: String?
         public var effective: String?
+        public var sent: String?
         public var expires: String?
         public var ends: String?
         public var headline: String?
@@ -485,6 +487,10 @@ public enum HazardParser {
             level: level(tier: tier, severity: p.severity, urgency: p.urgency),
             onset: date(p.onset) ?? date(p.effective),
             expires: date(p.ends) ?? date(p.expires),
+            sent: date(p.sent),
+            // Only worth keeping when it differs from the end — otherwise the
+            // statement simply runs to the end of the event.
+            nextStatement: date(p.ends) != nil && date(p.expires) != date(p.ends) ? date(p.expires) : nil,
             headline: p.headline,
             instruction: p.instruction?.trimmingCharacters(in: .whitespacesAndNewlines),
             areaDesc: p.areaDesc,
