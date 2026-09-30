@@ -126,7 +126,9 @@ struct MapSurfaceView: View {
     #endif
     /// Additive. See `MapLayerRole.context`.
     @State private var context: Set<String> = ["warnings", "home", "coverage", "counties"]
-    @State private var band: SatelliteFieldSource.Band = .infrared
+    /// The cloud view's loop. Owned here like the radar's, so switching views
+    /// and back finds it already loaded.
+    @StateObject private var satellite = SatelliteLoopModel()
     @State private var fireProduct: TexasFireFieldSource.Product = .burnBan
     /// The day (or days totalled) chosen under each forecast view, kept per
     /// view so looking at storms on day 3 does not move rain totals off the
@@ -139,7 +141,6 @@ struct MapSurfaceView: View {
     /// Re-read on a timer rather than computed per frame: these are cache-busting
     /// buckets, and recomputing one inside `layers` would make every SwiftUI pass
     /// a potential new source id.
-    @State private var satelliteStamp = SatelliteFieldSource.currentStamp()
     @State private var fireStamp = TexasFireFieldSource.currentStamp()
 
     /// The tiles the current view's renderer last said it needed. Held so the
@@ -176,7 +177,7 @@ struct MapSurfaceView: View {
     private var currentStamps: [String] {
         switch surface {
         case .radar: return radar.stampsByUrgency
-        case .cloud: return [satelliteStamp]
+        case .cloud: return satellite.stampsByUrgency
         case .fire:  return [fireStamp]
         case .storms, .excessiveRain, .rainTotals: return []
         }
@@ -190,7 +191,7 @@ struct MapSurfaceView: View {
     private var onScreenStamps: [String] {
         switch surface {
         case .radar: return radar.current.map { [$0.stamp] } ?? []
-        case .cloud: return [satelliteStamp]
+        case .cloud: return satellite.playhead.a.map { [$0.stamp] } ?? []
         case .fire:  return [fireStamp]
         case .storms, .excessiveRain, .rainTotals: return []
         }
@@ -213,7 +214,7 @@ struct MapSurfaceView: View {
         guard let home = settings.homeCoordinate else { return nil }
         return RadarSites.nearest(latitude: home.latitude, longitude: home.longitude).first
     }
-    private var satelliteSource: SatelliteFieldSource { SatelliteFieldSource(band: band) }
+    private var satelliteSource: SatelliteFieldSource { satellite.source }
     private var fireSource: TexasFireFieldSource { TexasFireFieldSource(product: fireProduct) }
 
     var body: some View {
@@ -223,7 +224,7 @@ struct MapSurfaceView: View {
         }
         .overlay(alignment: .bottom) {
             // The padding lives here, not on the timeline: the timeline is absent
-            // under the cloud and fire views, and a status bar flush against the
+            // under the fire view, and a status bar flush against the
             // bottom of the window looks like a mistake.
             VStack(spacing: 8) {
                 status
@@ -241,6 +242,7 @@ struct MapSurfaceView: View {
         .task { await radar.run(driving: false) }
         .task { await hazards.poll(settings: settings) }
         .task { await refreshStamps() }
+        .task { await satellite.run() }
         .task { await watchProgress() }
         .task { await countyLines.load() }
         // Only while a forecast is on screen — keyed on the choice, so picking
@@ -258,6 +260,11 @@ struct MapSurfaceView: View {
         // same gap swallowed the very first load whenever the viewport reported
         // before the index arrived.
         .onChange(of: radar.stamps) { _, _ in
+            prefetch(layerID: currentLayerID, tiles: visibleTiles)
+        }
+        // The same gap for the satellite: a new scan every five minutes, or a
+        // new band, is a list of stamps nobody has fetched.
+        .onChange(of: satellite.stamps) { _, _ in
             prefetch(layerID: currentLayerID, tiles: visibleTiles)
         }
         .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
@@ -293,7 +300,7 @@ struct MapSurfaceView: View {
     // MARK: Driving the loop
 
     /// Once per display refresh: move the clock, then say where the field now is.
-    /// Only radar animates; the other views are stills and report the same stamp
+    /// Radar and cloud animate; the other views are stills and report the same stamp
     /// twice, which is how `FieldRenderer` knows to skip the second draw entirely.
     ///
     /// Answers only for the CURRENT view. The canvas has no renderer for the
@@ -328,7 +335,15 @@ struct MapSurfaceView: View {
             let head = radar.playhead
             return ["radar": playhead(head.a, head.b, blend: head.blend)]
         case .cloud:
-            return ["cloud": .init(stampA: satelliteStamp, stampB: satelliteStamp)]
+            // Held crisp on the newest scan until every frame can be drawn, for
+            // the reason the radar is: see `loopIsReady`.
+            guard loopIsReady else {
+                let head = satellite.playhead
+                return ["cloud": playhead(head.a, head.a, blend: 0)]
+            }
+            satellite.tick(delta: delta)
+            let head = satellite.playhead
+            return ["cloud": playhead(head.a, head.b, blend: head.blend)]
         case .fire:
             return ["fire": .init(stampA: fireStamp, stampB: fireStamp)]
         case .storms, .excessiveRain, .rainTotals:
@@ -387,7 +402,11 @@ struct MapSurfaceView: View {
             store.prefetch(stamps: radar.stampsByUrgency,
                            tiles: overview(of: tiles), from: radarSource)
             store.prefetch(stamps: radar.stampsByUrgency, tiles: tiles, from: radarSource)
-        case "cloud": store.prefetch(stamps: [satelliteStamp], tiles: tiles, from: satelliteSource)
+        // Coarse first, as for radar: nineteen frames at the sharp level is a
+        // few hundred requests, and the loop can move on the coarse pass.
+        case "cloud":
+            store.prefetch(stamps: satellite.stampsByUrgency, tiles: overview(of: tiles), from: satelliteSource)
+            store.prefetch(stamps: satellite.stampsByUrgency, tiles: tiles, from: satelliteSource)
         case "fire":  store.prefetch(stamps: [fireStamp], tiles: tiles, from: fireSource)
         default:      break
         }
@@ -403,13 +422,13 @@ struct MapSurfaceView: View {
         return FieldTileGrid.parents(of: tiles, levelsUp: 2, notBelow: source.zoomRange.lowerBound)
     }
 
-    /// Neither of these services takes a TIME argument, so "refresh" means asking
-    /// under a new cache key. The ABI CONUS sector lands every five minutes; a
-    /// burn ban changes when a county votes, so hourly is already eager.
+    /// The fire service takes no TIME argument, so "refresh" means asking under
+    /// a new cache key. A burn ban changes when a county votes, so hourly is
+    /// already eager. (The satellite has real scan times; see
+    /// `SatelliteLoopModel`.)
     private func refreshStamps() async {
         while !Task.isCancelled {
             try? await Task.sleep(for: .seconds(60))
-            satelliteStamp = SatelliteFieldSource.currentStamp()
             fireStamp = TexasFireFieldSource.currentStamp()
         }
     }
@@ -521,6 +540,9 @@ struct MapSurfaceView: View {
             return FieldStatus(message: "Can't load \(radar.site?.id ?? "the radar")",
                                detail: radar.failure, canRetry: true)
         }
+        if surface == .cloud, let failure = satellite.failure, satellite.frames.isEmpty {
+            return FieldStatus(message: "Can't load the satellite", detail: failure, canRetry: true)
+        }
         if surface == .radar, radar.site == nil {
             return FieldStatus(message: "No radar chosen",
                                detail: "Set your home, or pick a radar in the panel",
@@ -566,7 +588,11 @@ struct MapSurfaceView: View {
     }
 
     private var loadingMessage: String {
-        surface == .radar ? "Loading the last hour" : "Filling in the map"
+        switch surface {
+        case .radar: return "Loading the last hour"
+        case .cloud: return "Loading the last three hours"
+        default:     return "Filling in the map"
+        }
     }
 
     /// FRAMES, NOT TILES — a frame is a thing you can see on the scrub strip, and
@@ -582,6 +608,9 @@ struct MapSurfaceView: View {
         incompleteSince = Date()
         if surface == .radar, radar.failure != nil || radar.isStale {
             Task { await radar.load() }
+        }
+        if surface == .cloud, satellite.failure != nil {
+            Task { await satellite.load() }
         }
         // Re-ask for everything the viewport needs. Arrivals broadcast to the
         // renderer, so the picture repairs itself without the map being touched.
@@ -675,19 +704,18 @@ struct MapSurfaceView: View {
                                                            blend: radar.playhead.blend))),
                 caption: radarCaption)
         case .cloud:
+            let head = satellite.playhead
             return MapLayer(
                 id: "cloud", name: "Cloud", symbol: surface.symbol,
                 role: .subject, isOn: true,
                 content: .field(FieldLayer(source: satelliteSource,
-                                           stamps: [satelliteStamp],
-                                           playhead: .init(stampA: satelliteStamp,
-                                                           stampB: satelliteStamp))),
+                                           stamps: satellite.stamps,
+                                           playhead: playhead(head.a, head.b, blend: head.blend))),
                 // "daylight" because the visible band is night-blind, and a black
                 // screen at midnight would otherwise read as clear sky. The time
-                // is when the tiles were asked for: the service serves only its
-                // newest image and never says when that was taken.
-                caption: (band.isNightBlind ? "daylight · " : "")
-                    + "fetched \(When.moment(Self.bucketStart(satelliteStamp, seconds: 300)))")
+                // is the newest scan's own, as the satellite service lists it.
+                caption: (satellite.band.isNightBlind ? "daylight · " : "")
+                    + (satellite.newest.map { "newest scan \(When.moment($0.time))" } ?? "loading"))
         case .fire:
             return MapLayer(
                 id: "fire", name: "Fire", symbol: surface.symbol,
@@ -740,7 +768,7 @@ struct MapSurfaceView: View {
     /// DIFFERENT SENTENCES: the index can be perfect and every tile refused, and a
     /// loop whose newest frame is old is not a picture of now.
     /// The start of a field's cache bucket — when its current tiles were asked
-    /// for. See `SatelliteFieldSource.currentStamp`.
+    /// for. See `TexasFireFieldSource.currentStamp`.
     private static func bucketStart(_ stamp: String, seconds: Int) -> Date {
         Date(timeIntervalSince1970: TimeInterval((Int(stamp) ?? 0) * seconds))
     }
@@ -812,7 +840,7 @@ struct MapSurfaceView: View {
         let recenter: (() -> Void)? = settings.hasHome ? { recenterHome() } : nil
         return LayerPanel(surface: $surface,
                           context: $context,
-                          band: $band,
+                          band: $satellite.band,
                           fireProduct: $fireProduct,
                           forecastPeriods: $forecastPeriods,
                           radarSite: $radarSiteChoice,
@@ -830,7 +858,7 @@ struct MapSurfaceView: View {
     private var captions: [MapSurface: String] {
         var out: [MapSurface: String] = [:]
         if let caption = radarCaption { out[.radar] = caption }
-        out[.cloud] = band.label
+        out[.cloud] = satellite.band.label
         out[.fire] = fireProduct.label
         for view in MapSurface.allCases {
             if let product = view.forecast, let caption = forecastCaption(product) { out[view] = caption }
@@ -840,9 +868,9 @@ struct MapSurfaceView: View {
 
     // MARK: Timeline
 
-    /// The scrub strip only under the radar view, because it describes that loop
-    /// and nothing else — cloud and fire are stills, and a scrub strip under them
-    /// would be a control for a dimension they do not have. The forecasts put
+    /// The scrub strip under the two views that are loops — radar and cloud —
+    /// and nothing else: fire is a still, and a scrub strip under it would be a
+    /// control for a dimension it does not have. The forecasts put
     /// their legend here instead: it is the thing under that map you read the
     /// map by.
     @ViewBuilder private var timeline: some View {
@@ -866,6 +894,12 @@ struct MapSurfaceView: View {
                           isPlaying: radar.isPlaying,
                           togglePlay: { radar.isPlaying.toggle() },
                           scrub: { radar.scrub(to: $0) })
+        } else if surface == .cloud, !satellite.frames.isEmpty {
+            RadarScrubBar(loop: satellite.frames,
+                          index: satellite.index,
+                          isPlaying: satellite.isPlaying,
+                          togglePlay: { satellite.isPlaying.toggle() },
+                          scrub: { satellite.scrub(to: $0) })
         }
     }
 }

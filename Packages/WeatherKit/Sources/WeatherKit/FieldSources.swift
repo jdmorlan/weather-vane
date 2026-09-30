@@ -22,38 +22,52 @@ import Foundation
 import CoreGraphics
 import ImageIO
 
-// MARK: - Satellite cloud
+// MARK: - Satellite
 
-/// GOES-East ABI, from the Iowa State mesonet.
+/// GOES-East and GOES-West ABI imagery, from NOAA's nowCOAST, as a loop.
 ///
-/// NOT A LOOP, AND THE SERVICE IS WHY. The radar loop can be scrubbed back
-/// because every Level II volume is kept as its own file. `goes_east.cgi` publishes no TIME
-/// dimension at all: it renders the latest imagery and nothing else. So this is a
-/// layer showing NOW, refreshed on the ABI cadence, and the app does not offer a
-/// timeline it cannot honour.
+/// WHAT THIS REPLACED. Iowa State's `goes_east.cgi`, which served the newest
+/// image only — no TIME dimension, so the cloud view was a still — and served
+/// it already coloured, which this file then turned back into opacity by
+/// brightness. For water vapour that was backwards: the enhancement paints moist
+/// air blue, blue is dark by luma, so the moisture — the thing the band exists to
+/// show — was the part that faded out, and the dry slots were drawn solid yellow.
+///
+/// WHY nowCOAST. It publishes each band as a WMS layer WITH a time dimension:
+/// every five-minute scan for the last seven and a half hours, the newest about
+/// four minutes after it was taken (measured 2026-09-30, 22:28Z listed at
+/// 22:32Z). The tiles come as plain greyscale — a 256-entry grey palette — so
+/// the colour is ours to choose, and chosen once, every frame of the loop shares
+/// it. Composite of GOES-19 (East) and GOES-18 (West), so the Pacific trough
+/// upstream is in the picture too.
+///
+/// GREY MEANS COLD in all three infrared-type bands: bright is a cold cloud top
+/// or, in water vapour, moisture high enough to be cold. The tables below are
+/// indexed by that grey.
 public struct SatelliteFieldSource: FieldTileSource {
 
     /// Which ABI channel, named by what it shows rather than its number.
     public enum Band: String, CaseIterable, Sendable, Identifiable {
-        /// 10.3 µm clean longwave IR. Cloud tops day and night, and the coldest
-        /// tops are the tallest storms. The default because it is the only one
-        /// that works at 3am.
+        /// Band 13, 10.3 µm clean longwave IR. Cloud tops day and night, and the
+        /// coldest tops are the tallest storms. The default because it is the
+        /// only one that works at 3am.
         case infrared
-        /// 0.64 µm red visible. The sharpest cloud picture there is — and blank
-        /// after sunset, which the UI has to say out loud rather than show as
-        /// clear sky.
+        /// Band 2, 0.64 µm red visible. The sharpest cloud picture there is — and
+        /// blank after sunset, which the UI has to say out loud rather than show
+        /// as clear sky.
         case visible
-        /// 6.9 µm mid-level water vapour. Not clouds: MOISTURE, which is how you
-        /// see the trough that the 500 mb chart draws as contours.
+        /// Band 8, 6.2 µm upper-level water vapour. Not clouds: MOISTURE in the
+        /// upper troposphere, which is how you see the trough that the 500 mb
+        /// chart draws as contours — and, looped, how you watch it move.
         case waterVapor
 
         public var id: String { rawValue }
 
         var layer: String {
             switch self {
-            case .infrared:   return "conus_ch13"
-            case .visible:    return "conus_ch02"
-            case .waterVapor: return "conus_ch09"
+            case .infrared:   return "goes_longwave_imagery"
+            case .visible:    return "goes_visible_imagery"
+            case .waterVapor: return "goes_water_vapor_imagery"
             }
         }
 
@@ -71,117 +85,242 @@ public struct SatelliteFieldSource: FieldTileSource {
     }
 
     public var band: Band
-    public var curve: Curve
 
-    /// How brightness becomes opacity, per band.
-    ///
-    /// ONE CURVE CANNOT SERVE THREE BANDS, and trying it is why the water-vapour
-    /// layer first shipped invisible. The bands do not share a brightness scale:
-    /// measured over six tiles spread across Texas and its surroundings, the
-    /// middle of each band's distribution sits somewhere completely different.
-    ///
-    ///                p1     p25    p50    p90    p99
-    ///     ch13 IR   .012   .118   .392   .552   .906
-    ///     ch09 WV   .087   .125   .165   .342   .796
-    ///     ch02 VIS  .173   .239   .290   .459   .612
-    ///
-    /// A floor of .10 with a solid of .62 — the single curve that was here first —
-    /// is roughly right for IR, puts the whole useful half of WV under 10%
-    /// opacity, and does not clear the ground in VIS at all.
-    public struct Curve: Equatable, Sendable {
-        /// Brightness below which a pixel is dropped entirely.
-        public var floor: Float
-        /// Brightness at and above which it is drawn at full strength.
-        public var solid: Float
-        /// Ceiling, so even a thunderstorm top lets a little of the map through —
-        /// satellite you cannot see the ground under is satellite you cannot
-        /// locate.
-        public var maxAlpha: Float
+    /// Bump when a colour table changes, so cached tiles drawn with the old one
+    /// are not handed back under the new name.
+    private static let tableVersion = 1
 
-        public init(floor: Float, solid: Float, maxAlpha: Float) {
-            self.floor = floor; self.solid = solid; self.maxAlpha = maxAlpha
-        }
-    }
-
-    public static func curve(for band: Band) -> Curve {
-        switch band {
-        // Warm ground is the dark quarter of the scale and cold tops run past .9,
-        // so the floor sits above p25 and the solid point is reachable by a real
-        // thunderstorm rather than by nothing at all.
-        case .infrared:   return Curve(floor: 0.16, solid: 0.75, maxAlpha: 0.85)
-        // NOT A CLOUD MASK. Water vapour is a field with a value everywhere — the
-        // dry slot behind a trough is as much of a reading as the moist plume
-        // ahead of it — so the floor only clears the very bottom and the whole
-        // band is drawn. Held further back than the others because it is context
-        // under the radar, not the subject.
-        case .waterVapor: return Curve(floor: 0.09, solid: 0.48, maxAlpha: 0.72)
-        // Sunlit LAND is bright in the visible, which is exactly what makes this
-        // band hard to overlay: the floor has to clear ground that is genuinely
-        // well up the scale, so only the brighter cloud survives.
-        case .visible:    return Curve(floor: 0.30, solid: 0.62, maxAlpha: 0.90)
-        }
-    }
-
-    public var id: String { "goes-east-\(band.layer)-\(curve.floor)-\(curve.solid)-\(curve.maxAlpha)" }
-    public var zoomRange: ClosedRange<Int> { 3...9 }
+    public var id: String { "nowcoast-\(band.layer)-v\(Self.tableVersion)" }
+    /// The ABI's infrared bands are 2 km at best, and further from nadir over
+    /// Texas; past z7 a tile pixel is finer than the scan. Visible is 0.5 km,
+    /// which z9 still resolves.
+    public var zoomRange: ClosedRange<Int> { band == .visible ? 3...9 : 3...7 }
+    public var maxPixelScale: Double? { 1 }
 
     public init(band: Band = .infrared) {
         self.band = band
-        self.curve = Self.curve(for: band)
     }
 
-    public init(band: Band, curve: Curve) {
-        self.band = band
-        self.curve = curve
-    }
+    public static let host = "https://nowcoast.noaa.gov"
+    public static let credit = "GOES-19 / GOES-18 ABI · NOAA nowCOAST"
 
-    public static let host = "https://mesonet.agron.iastate.edu"
-    public static let credit = "GOES-East ABI · NOAA via Iowa State Mesonet"
+    static let wms = "\(host)/geoserver/satellite/wms"
 
-    /// The ABI CONUS sector refreshes every five minutes. The stamp is a bucket
-    /// rather than a real valid time — the service has no TIME argument, so this
-    /// is only here to stop a cached tile being shown for an hour.
-    public static func currentStamp(_ now: Date = Date()) -> String {
-        String(Int(now.timeIntervalSince1970) / 300)
-    }
+    /// The service's list of scans for every layer.
+    public static let capabilitiesURL =
+        URL(string: "\(wms)?service=WMS&request=GetCapabilities&version=1.3.0")!
 
+    /// The stamp is the scan's own time, exactly as the capabilities list it.
+    /// It is both the TIME argument and the cache key, so a scan fetched once is
+    /// never fetched again.
     public func url(stamp: String, z: Int, x: Int, y: Int) -> URL? {
-        var components = URLComponents(string: "\(Self.host)/cgi-bin/wms/goes_east.cgi")
+        var components = URLComponents(string: Self.wms)
         components?.queryItems = [
-            .init(name: "SERVICE", value: "WMS"),
-            .init(name: "VERSION", value: "1.1.1"),
-            .init(name: "REQUEST", value: "GetMap"),
-            .init(name: "LAYERS", value: band.layer),
-            .init(name: "SRS", value: "EPSG:3857"),
-            .init(name: "BBOX", value: FieldTileGrid.bbox3857(z: z, x: x, y: y)),
-            .init(name: "WIDTH", value: "\(tileSize)"),
-            .init(name: "HEIGHT", value: "\(tileSize)"),
-            .init(name: "FORMAT", value: "image/png"),
-            .init(name: "TRANSPARENT", value: "TRUE"),
-            // Not a TIME argument — the service has none. This only keeps the
-            // bucket in the URL so a new bucket is a new request.
-            .init(name: "_", value: stamp),
+            .init(name: "service", value: "WMS"),
+            .init(name: "version", value: "1.1.1"),
+            .init(name: "request", value: "GetMap"),
+            .init(name: "layers", value: band.layer),
+            .init(name: "styles", value: ""),
+            .init(name: "srs", value: "EPSG:3857"),
+            .init(name: "bbox", value: FieldTileGrid.bbox3857(z: z, x: x, y: y)),
+            .init(name: "width", value: "\(tileSize)"),
+            .init(name: "height", value: "\(tileSize)"),
+            .init(name: "format", value: "image/png"),
+            .init(name: "transparent", value: "true"),
+            .init(name: "time", value: stamp),
         ]
         return components?.url
     }
 
-    /// BRIGHTNESS BECOMES OPACITY. The service hands back an opaque greyscale
-    /// image where dark is warm ground and bright is a cold cloud top. Drawn as
-    /// it arrives it is a lid over the entire map; mapped through this curve the
-    /// ground falls away and only the cloud is left.
-    ///
-    /// The COLOUR is kept rather than forced to white: the cold end of the
-    /// enhancement is tinted, and that tint is the part that says "this top is
-    /// high enough to matter".
     public func process(_ data: Data) -> CGImage? {
-        FieldPixels.map(data) { r, g, b, _ in
-            // Rec. 601 luma — the service's own enhancement is built on it, so
-            // matching it keeps the tinted cold end where the eye expects.
-            let luma = (0.299 * Float(r) + 0.587 * Float(g) + 0.114 * Float(b)) / 255
-            guard luma >= curve.floor else { return nil }
-            let t = min(1, (luma - curve.floor) / max(0.0001, curve.solid - curve.floor))
-            return (r, g, b, t * t * (3 - 2 * t) * curve.maxAlpha)
+        let table = Self.table(for: band)
+        return FieldPixels.map(data) { r, _, _, _ in table[Int(r)] }
+    }
+
+    /// The colour and opacity for each grey level. Built once per band.
+    public static func table(for band: Band) -> [(UInt8, UInt8, UInt8, Float)?] {
+        switch band {
+        case .waterVapor: return waterVaporTable
+        case .infrared:   return infraredTable
+        case .visible:    return visibleTable
         }
+    }
+
+    // MARK: Colour tables
+
+    /// One stop: at this grey, this colour at this opacity.
+    struct Stop {
+        let grey: Int
+        let r: Double, g: Double, b: Double
+        let alpha: Double
+        init(_ grey: Int, _ r: Double, _ g: Double, _ b: Double, _ alpha: Double) {
+            self.grey = grey; self.r = r; self.g = g; self.b = b; self.alpha = alpha
+        }
+    }
+
+    /// Linear between stops; a level whose opacity comes out zero is dropped.
+    static func interpolate(_ stops: [Stop]) -> [(UInt8, UInt8, UInt8, Float)?] {
+        (0...255).map { level in
+            guard let hi = stops.firstIndex(where: { $0.grey >= level }) else { return nil }
+            let b = stops[hi], a = stops[max(0, hi - 1)]
+            let t = b.grey == a.grey ? 1 : Double(level - a.grey) / Double(b.grey - a.grey)
+            let alpha = a.alpha + (b.alpha - a.alpha) * t
+            guard alpha > 0.004 else { return nil }
+            func mix(_ x: Double, _ y: Double) -> UInt8 { UInt8(max(0, min(255, (x + (y - x) * t).rounded()))) }
+            return (mix(a.r, b.r), mix(a.g, b.g), mix(a.b, b.b), Float(alpha))
+        }
+    }
+
+    /// DRY IS BROWN, MOIST IS WHITE, STORMS ARE BLUE — the forecasters' own
+    /// convention, and the reason their loops read at a glance. Over Texas on
+    /// 2026-09-30 the grey sat at p10 5, p50 86, p90 126, p99 178, so the
+    /// browns and oranges get the bottom fifth (the dry slots), greys and white
+    /// the broad middle (the ordinary moist plume), and the blues and greens only
+    /// the cold, deep moisture of convection above it.
+    ///
+    /// A FIELD, NOT A MASK. There is a value everywhere — the dry slot is as much
+    /// a reading as the plume — so the whole range is drawn, at an opacity that
+    /// still lets the county lines and the coast through.
+    static let waterVaporTable = interpolate([
+        Stop(0,    60,  28,   8, 0.82),
+        Stop(20,  140,  62,  14, 0.82),
+        Stop(45,  215, 125,  40, 0.82),
+        Stop(65,  230, 185, 110, 0.82),
+        Stop(85,  150, 140, 125, 0.80),
+        Stop(105, 185, 190, 195, 0.80),
+        Stop(125, 235, 238, 242, 0.82),
+        Stop(150, 140, 185, 235, 0.85),
+        Stop(180,  45, 105, 210, 0.88),
+        Stop(205,  20,  55, 150, 0.90),
+        Stop(222,  25, 140,  70, 0.90),
+        Stop(240, 160, 225, 110, 0.90),
+        Stop(255, 255, 255, 255, 0.90),
+    ])
+
+    /// Warm ground is dropped, cloud comes in grey to white, and past that the
+    /// classic enhancement: blue, green, yellow, orange, red, magenta as the
+    /// tops get colder — which is to say taller. The colour starts where the
+    /// tops are cold enough to be convection; measured over Texas the same
+    /// afternoon, cloud-free ground ran p50 83 and the storms' cores 225–240.
+    static let infraredTable = interpolate([
+        Stop(0,     0,   0,   0, 0),
+        Stop(95,   90,  90,  90, 0),
+        Stop(120, 150, 150, 150, 0.35),
+        Stop(160, 220, 220, 220, 0.75),
+        Stop(185, 255, 255, 255, 0.85),
+        Stop(195, 120, 190, 255, 0.90),
+        Stop(208,  30,  90, 220, 0.92),
+        Stop(218,  40, 170,  70, 0.92),
+        Stop(226, 250, 230,  60, 0.95),
+        Stop(234, 245, 140,  30, 0.95),
+        Stop(242, 215,  30,  30, 0.95),
+        Stop(250, 160,  20, 160, 0.95),
+        Stop(255, 255, 255, 255, 0.95),
+    ])
+
+    /// Brightness becomes white cloud. Sunlit land is well up the scale in the
+    /// visible (p50 51, p90 113 that afternoon), so the floor clears it and only
+    /// cloud brighter than the ground survives.
+    static let visibleTable = interpolate([
+        Stop(0,     0,   0,   0, 0),
+        Stop(70,  200, 200, 200, 0),
+        Stop(110, 225, 225, 225, 0.55),
+        Stop(160, 245, 245, 245, 0.88),
+        Stop(255, 255, 255, 255, 0.92),
+    ])
+}
+
+// MARK: - Satellite scans
+
+/// Which scans exist for a band, from nowCOAST's capabilities document.
+public enum SatelliteScans {
+
+    /// Every time listed for `layer`, oldest first.
+    ///
+    /// The time dimension is written as a comma list of instants; WMS also
+    /// allows `start/end/period`, which is read too in case the service switches
+    /// to it, since a period is how a five-minute series is usually written.
+    public static func times(in capabilities: String, layer: String) -> [Date] {
+        guard let name = capabilities.range(of: "<Name>\(layer)</Name>") else { return [] }
+        let rest = capabilities[name.upperBound...]
+        // The NEXT layer's dimension must not be read as this one's.
+        let end = rest.range(of: "</Layer>")?.lowerBound ?? rest.endIndex
+        let scope = rest[..<end]
+        guard let tag = scope.range(of: "<Dimension name=\"time\""),
+              let open = scope[tag.upperBound...].firstIndex(of: ">"),
+              let close = scope[open...].range(of: "</Dimension>") else { return [] }
+        let body = scope[scope.index(after: open)..<close.lowerBound]
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+
+        var out: [Date] = []
+        for item in body.split(separator: ",") {
+            let parts = item.split(separator: "/")
+            if parts.count == 3, let start = date(parts[0]), let stop = date(parts[1]),
+               let step = seconds(String(parts[2])), step > 0 {
+                var t = start
+                while t <= stop { out.append(t); t += step }
+            } else if let t = date(item) {
+                out.append(t)
+            }
+        }
+        return out.sorted()
+    }
+
+    /// The loop's frames: the newest scan, and scans back from it no closer
+    /// together than `spacing`, reaching back `span`.
+    ///
+    /// TEN MINUTES APART OVER THREE HOURS, and both numbers are the point. Water
+    /// vapour is read for motion on the scale of a trough — a jet streak or a dry
+    /// slot moves a county or two an hour — so an hour of loop barely shows it
+    /// moving, and three does. Every scan at five minutes over that span is 36
+    /// frames of tiles for motion the dissolve smooths out anyway; eighteen is
+    /// the same motion at half the downloads.
+    public static func frames(from times: [Date], span: TimeInterval = 3 * 3600,
+                              spacing: TimeInterval = 600) -> [Date] {
+        guard let newest = times.last else { return [] }
+        var picked: [Date] = [newest]
+        for t in times.reversed().dropFirst() {
+            guard newest.timeIntervalSince(t) <= span else { break }
+            // A little slack, so a scan that landed at 9:59 still counts as ten
+            // minutes on.
+            if picked.last!.timeIntervalSince(t) >= spacing - 30 { picked.append(t) }
+        }
+        return picked.reversed()
+    }
+
+    /// The stamp for a scan: its time as the capabilities write it, which is
+    /// also what the TIME argument wants.
+    public static func stamp(_ date: Date) -> String {
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return f.string(from: date)
+    }
+
+    private static func date(_ s: Substring) -> Date? {
+        let text = s.trimmingCharacters(in: .whitespacesAndNewlines)
+        let f = ISO8601DateFormatter()
+        f.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        if let d = f.date(from: text) { return d }
+        f.formatOptions = [.withInternetDateTime]
+        return f.date(from: text)
+    }
+
+    /// `PT5M`, `PT1H`, `PT30S` — the only shapes a scan period takes.
+    private static func seconds(_ period: String) -> TimeInterval? {
+        guard period.hasPrefix("PT") else { return nil }
+        var total: TimeInterval = 0, number = ""
+        for ch in period.dropFirst(2) {
+            if ch.isNumber || ch == "." { number.append(ch); continue }
+            guard let n = Double(number) else { return nil }
+            switch ch {
+            case "H": total += n * 3600
+            case "M": total += n * 60
+            case "S": total += n
+            default: return nil
+            }
+            number = ""
+        }
+        return total
     }
 }
 
