@@ -42,22 +42,31 @@ generate: ## Regenerate Vane.xcodeproj from project.yml
 version: ## Show the build number the next build will stamp
 	@Scripts/stamp-build-number.sh --print
 
-# The real apps, shipped. Everything lives in Scripts/release.sh; these only
-# save remembering its arguments. Add ARGS=--no-upload to sign without sending.
-release: ## Ship all three: iPhone/iPad + TV to TestFlight, Mac to /Applications
-	Scripts/release.sh all $(ARGS)
+# The real apps, shipped — by appleship (~/Documents/projects/appleship), which
+# reads everything it needs from project.yml. These only keep the old names.
+# `appleship doctor` checks a release would pass before Apple does.
+# Add ARGS=--no-upload to sign without sending anything.
+release: | appleship-installed ## Ship all three: iPhone/iPad + TV to TestFlight, Mac to /Applications
+	appleship all $(ARGS)
 
-release-ios: ## iPhone and iPad → TestFlight
-	Scripts/release.sh ios $(ARGS)
+release-ios: | appleship-installed ## iPhone and iPad → TestFlight
+	appleship ios $(ARGS)
 
-release-tv: ## Apple TV → TestFlight
-	Scripts/release.sh tv $(ARGS)
+release-tv: | appleship-installed ## Apple TV → TestFlight
+	appleship tv $(ARGS)
 
-release-mac: ## Mac → notarized by Apple → /Applications
-	Scripts/release.sh mac $(ARGS)
+release-mac: | appleship-installed ## Mac → notarized by Apple → /Applications
+	appleship mac $(ARGS)
 
-release-mac-finish: ## Collect a Mac release that timed out waiting for Apple, and install it
-	Scripts/release.sh mac-finish
+release-mac-finish: | appleship-installed ## Collect a Mac release that timed out waiting for Apple, and install it
+	appleship mac --finish
+
+.PHONY: appleship-installed
+appleship-installed:
+	@command -v appleship >/dev/null || { \
+		echo "appleship isn't installed. Get it with:"; \
+		echo "    make -C ~/Documents/projects/appleship install"; \
+		exit 1; }
 
 # A missing `uv` is the one failure here with a non-obvious fix, so say the fix
 # rather than letting make print "command not found" and stop.
