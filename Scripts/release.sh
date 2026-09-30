@@ -6,11 +6,13 @@
 #      Scripts/release.sh tv           Apple TV      → TestFlight
 #      Scripts/release.sh mac          Mac → notarized → /Applications
 #      Scripts/release.sh all          all three, Mac last (it waits the longest)
+#      Scripts/release.sh mac-finish   pick up a Mac release that timed out waiting
 #
 #      add --no-upload to build and sign everything but send nothing to Apple;
 #      the result lands in build/export/ — a check that signing works.
 #
-#  (`make release-ios`, `make release-tv`, `make release-mac`, `make release`.)
+#  (`make release-ios`, `make release-tv`, `make release-mac`, `make release`,
+#  `make release-mac-finish`.)
 #
 #  WHAT IT REPLACES. Picking the scheme, then the right "Any … Device"
 #  destination, then Product → Archive, then three screens of Organizer. Each is
@@ -39,7 +41,7 @@ targets=()
 for arg in "$@"; do
     case "$arg" in
         --no-upload) upload=0 ;;
-        mac|ios|tv) targets+=("$arg") ;;
+        mac|ios|tv|mac-finish) targets+=("$arg") ;;
         all) targets+=(ios tv mac) ;;
         *) sed -n '3,12p' "$0" | sed 's/^#  \{0,1\}//'; exit 1 ;;
     esac
@@ -63,12 +65,15 @@ run() {
 
 # --- Before anything is built -------------------------------------------------
 
+# Finishing builds nothing, so none of the checks below apply to it.
+[ "${targets[*]}" = mac-finish ] && skip_checks=1 || skip_checks=0
+
 command -v xcodegen >/dev/null || fail "xcodegen isn't installed: brew install xcodegen"
 
 # THE BUILD IS WHAT IS ON DISK, not what is committed. Shipping uncommitted
 # work is sometimes exactly right, but it should be a decision rather than a
 # surprise — and the build number's commit count would not describe it.
-if [ -n "$(git status --porcelain)" ] && [ $upload -eq 1 ]; then
+if [ $skip_checks -eq 0 ] && [ -n "$(git status --porcelain)" ] && [ $upload -eq 1 ]; then
     git status --short
     read -r -p "Uncommitted changes above will be in this build. Ship anyway? [y/N] " ok
     [ "$ok" = y ] || [ "$ok" = Y ] || exit 1
@@ -76,9 +81,11 @@ fi
 
 # The project is generated and not committed, so it is only as current as the
 # last `make generate`. Regenerating costs a second and removes the question.
-say "Regenerating the Xcode project"
-run "$STAMP-xcodegen" xcodegen generate
-echo "  build number will be $(Scripts/stamp-build-number.sh --print)"
+if [ $skip_checks -eq 0 ]; then
+    say "Regenerating the Xcode project"
+    run "$STAMP-xcodegen" xcodegen generate
+    echo "  build number will be $(Scripts/stamp-build-number.sh --print)"
+fi
 
 # --- The steps ----------------------------------------------------------------
 
@@ -159,15 +166,29 @@ mac() {
         -exportOptionsPlist "$(export_options developer-id upload)" \
         -exportPath "$out" -allowProvisioningUpdates
 
+    install_notarized
+}
+
+# Wait for Apple's verdict on $ARCHIVE, then install what comes back.
+install_notarized() {
+    local out="$ROOT/build/export/Vane"
+
     # There is no "wait" flag for this path: -exportNotarizedApp simply fails
-    # until Apple has finished, so ask every 30 seconds. Usually 2–10 minutes.
+    # until Apple has finished, so ask every 30 seconds. Usually 2–10 minutes —
+    # but a team's FIRST submission sat for over 40, so giving up is not failing:
+    # the submission stays with Apple, and `mac-finish` picks it up again.
     printf "  waiting for Apple"
     local tries=0
     until xcodebuild -exportNotarizedApp -archivePath "$ARCHIVE" -exportPath "$out" \
             >"$LOGS/$STAMP-Vane-fetch.log" 2>&1; do
+        # "Processing" is the only answer worth waiting through. Anything else —
+        # Apple rejected it, the archive is gone — will not change on its own.
+        grep -q "is processing" "$LOGS/$STAMP-Vane-fetch.log" || {
+            echo; tail -5 "$LOGS/$STAMP-Vane-fetch.log"
+            fail "Apple did not notarize it. Details in Xcode → Window → Organizer → this archive."; }
         tries=$((tries + 1))
-        [ $tries -lt 80 ] || { echo; fail "Not notarized after 40 minutes. Try again later with:
-    xcodebuild -exportNotarizedApp -archivePath \"$ARCHIVE\" -exportPath \"$out\""; }
+        [ $tries -lt 80 ] || { echo; fail "Apple is still processing after 40 minutes. Nothing is lost —
+  run \`make release-mac-finish\` later to collect it and install."; }
         printf "."; sleep 30
     done
     echo " notarized."
@@ -187,8 +208,19 @@ mac() {
     echo "  /Applications/Vane.app — $(defaults read /Applications/Vane.app/Contents/Info CFBundleVersion)"
 }
 
+# The newest Mac archive is the one still waiting: `mac` makes one per run and
+# `mac-finish` is only ever about the last of them.
+mac_finish() {
+    ARCHIVE=$(ls -dt "$HOME"/Library/Developer/Xcode/Archives/*/Vane\ *.xcarchive 2>/dev/null | head -1)
+    [ -n "$ARCHIVE" ] || fail "No Mac archive found. Run \`make release-mac\` first."
+    say "Collecting the notarized Mac app"
+    echo "  ${ARCHIVE/#$HOME/~}"
+    install_notarized
+}
+
 for t in "${targets[@]}"; do
     case "$t" in
+        mac-finish) mac_finish ;;
         ios) testflight VaneiOS iOS "iPhone and iPad" ;;
         tv)  testflight VaneTV tvOS "the TV" ;;
         mac) mac ;;

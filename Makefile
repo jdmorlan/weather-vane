@@ -7,7 +7,7 @@ ANALYSIS := analysis
 NOTEBOOK := notebooks/00-one-day.ipynb
 
 .DEFAULT_GOAL := help
-.PHONY: help notebook lab sync clean-cache generate version release release-ios release-tv release-mac
+.PHONY: help notebook lab sync clean-cache generate version release release-ios release-tv release-mac release-mac-finish
 
 help: ## List the targets
 	@echo "Vane"
@@ -55,6 +55,9 @@ release-tv: ## Apple TV → TestFlight
 
 release-mac: ## Mac → notarized by Apple → /Applications
 	Scripts/release.sh mac $(ARGS)
+
+release-mac-finish: ## Collect a Mac release that timed out waiting for Apple, and install it
+	Scripts/release.sh mac-finish
 
 # A missing `uv` is the one failure here with a non-obvious fix, so say the fix
 # rather than letting make print "command not found" and stop.
