@@ -1,0 +1,8 @@
+# appleship's settings for this project. `mac` was decided by answering
+# `appleship decide mac`; the reasons are in DECISIONS.md.
+mac:
+  ships: testflight
+  sandboxed: true
+  needs:
+    - network
+  decided: "2026-09-30"
