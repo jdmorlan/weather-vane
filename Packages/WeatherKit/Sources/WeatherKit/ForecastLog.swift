@@ -177,9 +177,12 @@ extension ForecastLogStore {
 public final class FileForecastLog: ForecastLogStore, @unchecked Sendable {
     public let root: URL
     private let lock = NSLock()
+    /// Orders writes against the OTHER app sharing this archive; see `ArchiveFileLock`.
+    private let fileLock: ArchiveFileLock
 
     public init(root: URL) {
         self.root = root
+        self.fileLock = ArchiveFileLock(root: root)
     }
 
     /// `<root>/2026/2026-09-14.ndjson.gz`
@@ -227,34 +230,35 @@ public final class FileForecastLog: ForecastLogStore, @unchecked Sendable {
     public func record(_ notes: [ForecastNote]) throws -> [String] {
         guard !notes.isEmpty else { return [] }
         lock.lock(); defer { lock.unlock() }
+        return try fileLock.withLock {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+            var written: [String] = []
+            for (day, incoming) in Dictionary(grouping: notes, by: \.validDay) {
+                var existing = try read(day: day)
+                var changed = false
+                for note in incoming.sorted(by: { $0.issuedAt < $1.issuedAt }) {
+                    guard ForecastLogMerge.shouldKeep(note, given: existing) else { continue }
+                    existing.append(note)
+                    existing.sort { $0.issuedAt < $1.issuedAt }
+                    changed = true
+                }
+                guard changed else { continue }
 
-        var written: [String] = []
-        for (day, incoming) in Dictionary(grouping: notes, by: \.validDay) {
-            var existing = try read(day: day)
-            var changed = false
-            for note in incoming.sorted(by: { $0.issuedAt < $1.issuedAt }) {
-                guard ForecastLogMerge.shouldKeep(note, given: existing) else { continue }
-                existing.append(note)
-                existing.sort { $0.issuedAt < $1.issuedAt }
-                changed = true
+                var body = Data()
+                for note in existing {
+                    body.append(try encoder.encode(note))
+                    body.append(UInt8(ascii: "\n"))
+                }
+                let url = url(forDay: day)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try Gzip.compress(body).write(to: url, options: .atomic)
+                written.append(day)
             }
-            guard changed else { continue }
-
-            var body = Data()
-            for note in existing {
-                body.append(try encoder.encode(note))
-                body.append(UInt8(ascii: "\n"))
-            }
-            let url = url(forDay: day)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try Gzip.compress(body).write(to: url, options: .atomic)
-            written.append(day)
+            return written.sorted()
         }
-        return written.sorted()
     }
 }
 

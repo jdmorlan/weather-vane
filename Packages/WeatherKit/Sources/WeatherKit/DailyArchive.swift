@@ -69,9 +69,12 @@ extension DailyArchiveStore {
 public final class FileDailyArchive: DailyArchiveStore, @unchecked Sendable {
     public let root: URL
     private let lock = NSLock()
+    /// Orders writes against the OTHER app sharing this archive; see `ArchiveFileLock`.
+    private let fileLock: ArchiveFileLock
 
     public init(root: URL) {
         self.root = root
+        self.fileLock = ArchiveFileLock(root: root)
     }
 
     private func url(forYear year: Int) -> URL {
@@ -110,27 +113,28 @@ public final class FileDailyArchive: DailyArchiveStore, @unchecked Sendable {
     public func merge(_ records: [DailyRecord]) throws -> [String] {
         guard !records.isEmpty else { return [] }
         lock.lock(); defer { lock.unlock() }
+        return try fileLock.withLock {
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
 
-        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            var written: [String] = []
+            let byYear = Dictionary(grouping: records) { DayKey.year(of: $0.day) ?? 0 }
 
-        var written: [String] = []
-        let byYear = Dictionary(grouping: records) { DayKey.year(of: $0.day) ?? 0 }
-
-        for (year, incoming) in byYear where year > 0 {
-            var existing = Dictionary(uniqueKeysWithValues: try readYear(year).map { ($0.day, $0) })
-            for record in incoming {
-                if let old = existing[record.day],
-                   !ArchiveMerge.shouldReplace(old, with: record) { continue }
-                existing[record.day] = record
-                written.append(record.day)
+            for (year, incoming) in byYear where year > 0 {
+                var existing = Dictionary(uniqueKeysWithValues: try readYear(year).map { ($0.day, $0) })
+                for record in incoming {
+                    if let old = existing[record.day],
+                       !ArchiveMerge.shouldReplace(old, with: record) { continue }
+                    existing[record.day] = record
+                    written.append(record.day)
+                }
+                let sorted = existing.values.sorted { $0.day < $1.day }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+                let data = try encoder.encode(sorted)
+                try data.write(to: url(forYear: year), options: .atomic)
             }
-            let sorted = existing.values.sorted { $0.day < $1.day }
-            let encoder = JSONEncoder()
-            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
-            let data = try encoder.encode(sorted)
-            try data.write(to: url(forYear: year), options: .atomic)
+            return written
         }
-        return written
     }
 }
 

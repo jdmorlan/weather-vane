@@ -199,6 +199,12 @@ final class AppSettings: ObservableObject {
     /// the iOS and tvOS apps were named before they shipped, so there is no
     /// older domain for them to read.
     ///
+    /// AND FROM THE REAL APP, INTO VANE DEV. Debug builds are a separate app
+    /// with their own id (`jdmorlan.vane.mac.dev`, see project.yml), so the same
+    /// empty-domain problem happens every time a Mac first runs Vane Dev. The
+    /// installed Vane is the better source when it is there — it is the setup in
+    /// use today — and the pre-rename domain is still the fallback behind it.
+    ///
     /// Reading another domain works because this app is not sandboxed (see
     /// `Weather.entitlements`). Non-destructive, like the archive migration
     /// above it: it copies and never clears the old domain, so a bad outcome is
@@ -209,10 +215,18 @@ final class AppSettings: ObservableObject {
         guard !defaults.bool(forKey: flag) else { return }
         defer { defaults.set(true, forKey: flag) }
 
+        var sources = ["jdm-solutions.weather"]
+        if Bundle.main.bundleIdentifier?.hasSuffix(".dev") == true {
+            sources.insert("jdmorlan.vane.mac", at: 0)
+        }
+
         // A domain that already has a token is one that has been set up under
-        // the new id — by sync, or by hand. Never overwrite that.
+        // the new id — by sync, or by hand. Never overwrite that. Of the
+        // sources, the first one that was ever set up wins, whole.
         guard (defaults.string(forKey: "tempestToken") ?? "").isEmpty,
-              let legacy = UserDefaults(suiteName: "jdm-solutions.weather")
+              let legacy = sources.lazy
+                .compactMap({ UserDefaults(suiteName: $0) })
+                .first(where: { !($0.string(forKey: "tempestToken") ?? "").isEmpty })
         else { return }
 
         for key in ["homeLat", "homeLon", "homeFacing", "tempestToken",

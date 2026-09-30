@@ -60,6 +60,33 @@ targets:
         # only has to exist so there is a key for it to overwrite, and so a build
         # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
+        # Pinned so that renaming the Debug product below does not rename the
+        # Swift module with it (`Vane Dev` would become `Vane_Dev`).
+        PRODUCT_MODULE_NAME: Vane
+      # DEBUG IS A SEPARATE APP: VANE DEV. A device decides two apps are the same
+      # app by bundle id, so while Debug and Release shared one, running from
+      # Xcode replaced the installed Vane and installing Vane replaced the one you
+      # were developing. With `.dev` on the end they sit side by side on every
+      # device — the real one from TestFlight or /Applications, the working copy
+      # from Xcode — told apart by name and by a grey icon with an orange DEV tag
+      # (`Scripts/make-dev-icons.py`, which derives it from this icon).
+      #
+      # WHAT THE TWO SHARE, ON PURPOSE. The iCloud settings store is named by
+      # a literal in the entitlements, not by bundle id, so Vane Dev finds the
+      # station and home already set. On the Mac the archive is reached through
+      # the app group, also not keyed by bundle id, so both read one past — and
+      # `ArchiveFileLock` keeps the two from writing the same file at once. What
+      # does not sync, `AppSettings.migrateLegacyDefaults` copies across once.
+      #
+      # Release is untouched, so TestFlight and App Store ids stay what they are.
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.mac.dev
+          # The Mac shows PRODUCT_NAME in the menu bar and Activity Monitor, not
+          # just the display name — both have to say Dev.
+          PRODUCT_NAME: Vane Dev
+          INFOPLIST_KEY_CFBundleDisplayName: Vane Dev
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
 
   # The SAME sources as the Mac app, deliberately — not a VaneTV-style
   # reimplementation. VaneTV has its own views because a ten-foot deck driven by
@@ -126,6 +153,13 @@ targets:
         # the app's own sandboxed directory — the right home. A group is only
         # worth claiming once something else (a widget) needs to read the archive,
         # and claiming one that isn't in the profile fails the signature.
+      # Vane Dev — see the Mac target. On iOS each app has its own sandbox, so
+      # Vane Dev fills its own archive rather than sharing the real app's.
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios.dev
+          INFOPLIST_KEY_CFBundleDisplayName: Vane Dev
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
 
   VaneTV:
     type: application
@@ -166,6 +200,12 @@ targets:
         # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "3"
+      # Vane Dev — see the Mac target.
+      configs:
+        Debug:
+          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.tv.dev
+          INFOPLIST_KEY_CFBundleDisplayName: Vane Dev
+          ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
 
 # THE BUILD NUMBER, ONCE, FOR ALL THREE APPS.
 #

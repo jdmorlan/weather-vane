@@ -53,6 +53,30 @@ final class SampleArchiveTests: XCTestCase {
         return (FileSampleArchive(root: root), root)
     }
 
+    /// The installed Vane and Vane Dev share one archive on a Mac. Two stores on
+    /// one root stand in for the two apps: each has its own `NSLock`, so only the
+    /// file lock stands between them — and without it, a read-merge-write racing
+    /// another one drops whichever minutes only the loser had.
+    func testTwoStoresOnOneRootLoseNothing() throws {
+        let (first, root) = makeStore()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let second = FileSampleArchive(root: root)
+
+        let base = sample("2026-06-15T08:00:00-05:00").timestamp
+        func minutes(_ range: StrideTo<Int>) -> [[StationSample]] {
+            range.map { [StationSample(timestamp: base + $0 * 60, bucketMinutes: 1)] }
+        }
+        let evens = minutes(stride(from: 0, to: 400, by: 2))
+        let odds = minutes(stride(from: 1, to: 400, by: 2))
+
+        DispatchQueue.concurrentPerform(iterations: 2) { i in
+            let (store, batches) = i == 0 ? (first, evens) : (second, odds)
+            for batch in batches { _ = try? store.merge(batch, timeZone: zone) }
+        }
+
+        XCTAssertEqual(try first.samples(onDay: "2026-06-15").count, 400)
+    }
+
     func testRoundTripsThroughDisk() throws {
         let (store, root) = makeStore()
         defer { try? FileManager.default.removeItem(at: root) }

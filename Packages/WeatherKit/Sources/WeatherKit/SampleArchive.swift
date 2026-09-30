@@ -75,9 +75,12 @@ public enum SampleMerge {
 public final class FileSampleArchive: SampleArchiveStore, @unchecked Sendable {
     public let root: URL
     private let lock = NSLock()
+    /// Orders writes against the OTHER app sharing this archive; see `ArchiveFileLock`.
+    private let fileLock: ArchiveFileLock
 
     public init(root: URL) {
         self.root = root
+        self.fileLock = ArchiveFileLock(root: root)
     }
 
     /// `<root>/2026/2026-06-15.ndjson.gz`
@@ -125,39 +128,40 @@ public final class FileSampleArchive: SampleArchiveStore, @unchecked Sendable {
     public func merge(_ samples: [StationSample], timeZone: TimeZone) throws -> [String] {
         guard !samples.isEmpty else { return [] }
         lock.lock(); defer { lock.unlock() }
+        return try fileLock.withLock {
+            let formatter = DayKey.formatter(timeZone: timeZone)
+            let byDay = Dictionary(grouping: samples) { formatter.string(from: $0.date) }
 
-        let formatter = DayKey.formatter(timeZone: timeZone)
-        let byDay = Dictionary(grouping: samples) { formatter.string(from: $0.date) }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.sortedKeys]
 
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.sortedKeys]
+            var written: [String] = []
+            for (day, incoming) in byDay {
+                // Keyed by instant: a station cannot report two readings for the same
+                // second, so the timestamp IS the identity.
+                var existing = Dictionary(uniqueKeysWithValues: try read(day: day).map { ($0.timestamp, $0) })
+                var changed = false
+                for sample in incoming {
+                    if let old = existing[sample.timestamp],
+                       !SampleMerge.shouldReplace(old, with: sample) { continue }
+                    existing[sample.timestamp] = sample
+                    changed = true
+                }
+                guard changed else { continue }
 
-        var written: [String] = []
-        for (day, incoming) in byDay {
-            // Keyed by instant: a station cannot report two readings for the same
-            // second, so the timestamp IS the identity.
-            var existing = Dictionary(uniqueKeysWithValues: try read(day: day).map { ($0.timestamp, $0) })
-            var changed = false
-            for sample in incoming {
-                if let old = existing[sample.timestamp],
-                   !SampleMerge.shouldReplace(old, with: sample) { continue }
-                existing[sample.timestamp] = sample
-                changed = true
+                var body = Data()
+                for sample in existing.values.sorted(by: { $0.timestamp < $1.timestamp }) {
+                    body.append(try encoder.encode(sample))
+                    body.append(UInt8(ascii: "\n"))
+                }
+                let url = url(forDay: day)
+                try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
+                                                        withIntermediateDirectories: true)
+                try Gzip.compress(body).write(to: url, options: .atomic)
+                written.append(day)
             }
-            guard changed else { continue }
-
-            var body = Data()
-            for sample in existing.values.sorted(by: { $0.timestamp < $1.timestamp }) {
-                body.append(try encoder.encode(sample))
-                body.append(UInt8(ascii: "\n"))
-            }
-            let url = url(forDay: day)
-            try FileManager.default.createDirectory(at: url.deletingLastPathComponent(),
-                                                    withIntermediateDirectories: true)
-            try Gzip.compress(body).write(to: url, options: .atomic)
-            written.append(day)
+            return written.sorted()
         }
-        return written.sorted()
     }
 }
 
