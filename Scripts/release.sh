@@ -173,21 +173,27 @@ mac() {
 install_notarized() {
     local out="$ROOT/build/export/Vane"
 
-    # There is no "wait" flag for this path: -exportNotarizedApp simply fails
-    # until Apple has finished, so ask every 30 seconds. Usually 2–10 minutes —
-    # but a team's FIRST submission sat for over 40, so giving up is not failing:
+    # THE APP APPLE WAS SENT, not a fresh export of the archive. The upload
+    # leaves a copy under the archive's Submissions folder; Apple's ticket names
+    # that exact signature, so that exact copy is the one to staple and install.
+    local sent
+    sent=$(ls -dt "$ARCHIVE"/Submissions/*/Vane.app 2>/dev/null | head -1)
+    [ -n "$sent" ] || fail "This archive was never sent to Apple. Run \`make release-mac\`."
+    rm -rf "$out"; mkdir -p "$out"
+    ditto "$sent" "$out/Vane.app"
+
+    # ASK APPLE, NOT XCODE. `xcodebuild -exportNotarizedApp` answers from the
+    # archive's own record, which said "processing" long after anyone could
+    # tell whether it was true. `stapler staple` looks the ticket up at Apple by
+    # the app's signature and attaches it if it exists — needing no password,
+    # and succeeding at the first moment it can. Usually 2–10 minutes, but a
+    # team's FIRST submission sat for over an hour, so giving up is not failing:
     # the submission stays with Apple, and `mac-finish` picks it up again.
     printf "  waiting for Apple"
     local tries=0
-    until xcodebuild -exportNotarizedApp -archivePath "$ARCHIVE" -exportPath "$out" \
-            >"$LOGS/$STAMP-Vane-fetch.log" 2>&1; do
-        # "Processing" is the only answer worth waiting through. Anything else —
-        # Apple rejected it, the archive is gone — will not change on its own.
-        grep -q "is processing" "$LOGS/$STAMP-Vane-fetch.log" || {
-            echo; tail -5 "$LOGS/$STAMP-Vane-fetch.log"
-            fail "Apple did not notarize it. Details in Xcode → Window → Organizer → this archive."; }
+    until xcrun stapler staple "$out/Vane.app" >"$LOGS/$STAMP-Vane-staple.log" 2>&1; do
         tries=$((tries + 1))
-        [ $tries -lt 80 ] || { echo; fail "Apple is still processing after 40 minutes. Nothing is lost —
+        [ $tries -lt 80 ] || { echo; fail "No ticket from Apple after 40 minutes. Nothing is lost —
   run \`make release-mac-finish\` later to collect it and install."; }
         printf "."; sleep 30
     done
