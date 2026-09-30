@@ -109,6 +109,7 @@ targets:
         # Distinct from the Mac app's. Nothing migrates between them — the
         # archive on an iPad is filled from WeatherFlow, not copied off a Mac —
         # so the reason to keep the Mac id frozen does not apply here.
+        # VaneTV carries this same id, deliberately — see there.
         PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios
         DEVELOPMENT_TEAM: CG68B3UD28
         CODE_SIGN_ENTITLEMENTS: Weather/VaneiOS.entitlements
@@ -183,7 +184,19 @@ targets:
     settings:
       base:
         PRODUCT_NAME: Vane
-        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.tv
+        # THE iOS APP'S ID, NOT ITS OWN, and that is what makes the TV part of
+        # the same App Store record. App Store Connect adds a platform to an
+        # existing app only when the new platform's build carries the same bundle
+        # id (universal purchase); a different id is a different app, which needs
+        # its own listing and its own name — and "Vane" is already taken, by
+        # this very record. With one id, iPhone, iPad and TV are one Vane, one
+        # TestFlight, one listing. The two binaries still differ completely:
+        # the id says which app, the platform says which build.
+        #
+        # Changed from `jdmorlan.vane.tv` before any TV build was uploaded, the
+        # last moment it was free. Nothing was lost on the TV: the setup gate is
+        # `hasHome`, and the home point returns by `SettingsSync`.
+        PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios
         DEVELOPMENT_TEAM: CG68B3UD28
         CODE_SIGN_ENTITLEMENTS: VaneTV/VaneTV.entitlements
         SWIFT_VERSION: "5.0"
@@ -200,10 +213,11 @@ targets:
         # with the script somehow skipped still produces a valid bundle.
         CURRENT_PROJECT_VERSION: "1"
         TARGETED_DEVICE_FAMILY: "3"
-      # Vane Dev — see the Mac target.
+      # Vane Dev — see the Mac target. Shares the iOS Dev id for the same reason
+      # Release shares the iOS id.
       configs:
         Debug:
-          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.tv.dev
+          PRODUCT_BUNDLE_IDENTIFIER: jdmorlan.vane.ios.dev
           INFOPLIST_KEY_CFBundleDisplayName: Vane Dev
           ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon-Dev
 
