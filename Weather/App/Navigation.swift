@@ -33,7 +33,9 @@
 //    BEYOND   not this acre at all — the wave upstairs that steers it, from a
 //             model run rather than the station.
 //    FORECASTERS  other people, reading the same sky: two YouTube channels'
-//             newest videos, and their storm coverage while it is on the air.
+//             newest videos, their storm coverage while it is on the air, and
+//             Space City Weather's daily Houston post. Named for the blog
+//             rather than "Blog", because it is one blog, not a reader.
 //             Not the app's own view of anything, which is why it is a group
 //             of its own rather than a corner of Map.
 //    STATION  none of the above: the instrument rather than the weather. It sits
@@ -68,6 +70,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     case explore = "Explore"
     case pattern = "Pattern"
     case videos = "Videos"
+    case blog = "Space City Weather"
     case station = "Station"
 
     var id: String { rawValue }
@@ -84,6 +87,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .explore: return "magnifyingglass"
         case .pattern: return "globe.americas"
         case .videos:  return "play.rectangle"
+        case .blog:    return "newspaper"
         case .station: return "gauge.with.dots.needle.bottom.50percent"
         }
     }
@@ -103,6 +107,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .explore: return "Explore"
         case .pattern: return "Upper Air"
         case .videos:  return "Forecasters"
+        case .blog:    return "Space City Weather"
         case .station: return "Station Health"
         }
     }
@@ -122,6 +127,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .explore: return "The days when anything happened"
         case .pattern: return "The 500 mb wave that steers all of it"
         case .videos:  return "Texas Weather Center and Convective Chronicles"
+        case .blog:    return "Houston's forecast, from Eric Berger and Matt Lanza"
         case .station: return "Whether the instrument itself is well"
         }
     }
@@ -141,7 +147,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
             case .climate: return [.rhythms, .rain, .wind]
             case .record:  return [.history, .explore]
             case .beyond:  return [.pattern]
-            case .forecasters: return [.videos]
+            case .forecasters: return [.videos, .blog]
             case .equipment: return [.station]
             }
         }
@@ -156,7 +162,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     /// where a dim one with a reason reads as something you have yet to do.
     var needsStation: Bool {
         switch self {
-        case .map, .pattern, .videos: return false
+        case .map, .pattern, .videos, .blog: return false
         case .now, .forecast, .rhythms, .rain, .history, .wind, .explore, .station: return true
         }
     }
@@ -168,7 +174,8 @@ struct Sidebar: View {
     @Binding var selection: Destination
     @EnvironmentObject private var settings: AppSettings
     /// What a row has waiting that is worth knowing before you go there: LIVE
-    /// on Videos when a forecaster is on the air with a storm.
+    /// on Videos when a forecaster is on the air with a storm, NEW on the blog
+    /// when there is a post not yet opened on this device.
     var badges: [Destination: Text] = [:]
     /// Opens setup. Passed in rather than toggling a binding here because the
     /// sheet belongs to the window, not to the source list.

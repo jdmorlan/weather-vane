@@ -32,6 +32,9 @@ struct RootView: View {
     /// whichever destination is open, or the sidebar's LIVE badge would only
     /// ever appear on the page it points to.
     @StateObject private var forecasters = ForecasterModel()
+    /// On the root for the same reason: the sidebar's NEW has to appear
+    /// without the page being opened first.
+    @StateObject private var blog = BlogModel()
     @EnvironmentObject private var playback: VideoPlayback
 
     @State private var destination: Destination = .now
@@ -100,6 +103,7 @@ struct RootView: View {
         // asking, and it must not stop because you switched to Wind.
         .task { await models.hazards.poll(settings: settings) }
         .task { await forecasters.poll() }
+        .task { await blog.poll() }
         // On the root for the same reason as the hazard poll: a new model run
         // landing while you are reading History should be there when you go back
         // to Rain, not start loading when you arrive.
@@ -174,6 +178,8 @@ struct RootView: View {
             MapSurfaceView()
         case .videos:
             ForecasterView(model: forecasters)
+        case .blog:
+            BlogView(model: blog)
         case .pattern:
             UpperAirSurface(model: models.upperAir) { showingSetup = true }
         case .station:
@@ -199,6 +205,7 @@ struct RootView: View {
     private var badges: [Destination: Text] {
         var out: [Destination: Text] = [:]
         if !forecasters.stormStreams.isEmpty { out[.videos] = Text("LIVE").foregroundStyle(.red) }
+        if blog.hasUnread { out[.blog] = Text("NEW") }
         return out
     }
 
@@ -254,6 +261,7 @@ struct RootView: View {
                     // has to mean the thing on screen.
                     if destination == .station { await models.health.refresh(settings: settings) }
                     if destination == .videos { await forecasters.refresh() }
+                    if destination == .blog { await blog.refresh() }
                 }
             } label: {
                 Image(systemName: "arrow.clockwise")
