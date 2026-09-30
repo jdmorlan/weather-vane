@@ -334,6 +334,80 @@ public struct Outlook: Equatable, Sendable {
     }
 }
 
+// MARK: - Severe weather, hazard by hazard
+
+/// WHICH KIND OF SEVERE. The categorical outlook above folds three hazards into
+/// one colour, and the three ask for different things of a person: hail puts
+/// the car in the garage, a tornado means knowing where you would shelter,
+/// damaging wind means the patio furniture. SPC draws each one's probability
+/// separately for days 1 and 2; day 3 is published only as the three combined.
+public enum SevereHazard: String, CaseIterable, Identifiable, Sendable {
+    case tornado, hail, wind
+    /// Day 3's only product: a tornado, 1-inch hail OR a 58 mph gust.
+    case any
+
+    public var id: String { rawValue }
+
+    /// SPC's filename fragment: `day1otlk_torn.lyr.geojson`.
+    var file: String {
+        switch self {
+        case .tornado: return "torn"
+        case .hail:    return "hail"
+        case .wind:    return "wind"
+        case .any:     return "prob"
+        }
+    }
+
+    public var label: String {
+        switch self {
+        case .tornado: return "Tornado"
+        case .hail:    return "Hail"
+        case .wind:    return "Damaging wind"
+        case .any:     return "Any severe"
+        }
+    }
+
+    /// The days SPC publishes this hazard for.
+    public var days: [Int] { self == .any ? [3] : [1, 2] }
+}
+
+/// One hazard's probability areas for one day, as SPC drew them.
+///
+/// THE NUMBER IS THE CHANCE OF IT HAPPENING WITHIN 25 MILES OF A POINT, not at
+/// the point. That is why the values look small — 5% hail is a real day to
+/// garage the car — and why they are never shown as a raw percentage alone.
+public struct SevereProbability: Equatable, Sendable {
+    public struct Area: Equatable, Sendable {
+        /// 0.02, 0.05, 0.15 …
+        public var probability: Double
+        public var shape: GeoShape
+    }
+
+    public var hazard: SevereHazard
+    public var day: Int
+    public var issued: Date?
+    public var validFrom: Date?
+    public var validUntil: Date?
+    public var areas: [Area]
+
+    public init(hazard: SevereHazard, day: Int, issued: Date? = nil,
+                validFrom: Date? = nil, validUntil: Date? = nil, areas: [Area]) {
+        self.hazard = hazard
+        self.day = day
+        self.issued = issued
+        self.validFrom = validFrom
+        self.validUntil = validUntil
+        self.areas = areas
+    }
+
+    /// The highest probability whose area contains the point. ZERO, not nil,
+    /// outside every area: SPC drawing nothing over you is a statement — below
+    /// its lowest contour — rather than a gap in what we know.
+    public func probability(at point: GeoPoint) -> Double {
+        areas.filter { $0.shape.contains(point) }.map(\.probability).max() ?? 0
+    }
+}
+
 // MARK: - Decoding
 
 public enum OutlookParser {
@@ -380,6 +454,33 @@ public enum OutlookParser {
         }
         return Outlook(product: .severeStorms, period: period, issued: issued,
                        validFrom: from, validUntil: until, areas: areas)
+    }
+
+    /// SPC's `dayNotlk_{torn,hail,wind,prob}.lyr.geojson`. `LABEL` is the
+    /// probability as a fraction ("0.05"); a quiet day arrives as one feature
+    /// labelled "Less Than 5% All Areas" with no geometry, which parses to no
+    /// areas rather than to a failure.
+    public static func spcProbability(_ data: Data, hazard: SevereHazard, day: Int) throws -> SevereProbability {
+        struct Properties: Decodable {
+            var LABEL: String?
+            var VALID_ISO: String?
+            var EXPIRE_ISO: String?
+            var ISSUE_ISO: String?
+        }
+        let features = try decode(Properties.self, from: data)
+        var issued: Date?, from: Date?, until: Date?
+        var areas: [SevereProbability.Area] = []
+        for feature in features {
+            let p = feature.properties
+            issued = issued ?? iso(p?.ISSUE_ISO)
+            from = from ?? iso(p?.VALID_ISO)
+            until = until ?? iso(p?.EXPIRE_ISO)
+            guard let label = p?.LABEL, let probability = Double(label), probability > 0,
+                  let shape = feature.geometry?.shape() else { continue }
+            areas.append(.init(probability: probability, shape: shape))
+        }
+        return SevereProbability(hazard: hazard, day: day, issued: issued,
+                                 validFrom: from, validUntil: until, areas: areas)
     }
 
     /// WPC's Excessive Rainfall Outlook, as NOAA's ArcGIS vector service
@@ -563,23 +664,38 @@ public struct OutlookClient: Sendable {
         return components.url!
     }
 
+    public static func url(_ hazard: SevereHazard, day: Int) -> URL {
+        URL(string: "https://www.spc.noaa.gov/products/outlook/day\(day)otlk_\(hazard.file).lyr.geojson")!
+    }
+
     public func outlook(_ product: OutlookProduct, period: Int) async throws -> Outlook {
-        var request = URLRequest(url: Self.url(product, period: period))
         // Longer for rain totals, which are the size of a photo rather than
         // of a page.
-        request.timeoutInterval = product == .rainTotals ? 60 : 20
+        let data = try await fetch(Self.url(product, period: period), issuer: product.issuer,
+                                   timeout: product == .rainTotals ? 60 : 20)
+        switch product {
+        case .severeStorms:  return try OutlookParser.spc(data, period: period)
+        case .excessiveRain: return try OutlookParser.wpc(data, period: period)
+        case .rainTotals:    return try OutlookParser.wpcRainTotals(data, period: period)
+        }
+    }
+
+    public func severeProbability(_ hazard: SevereHazard, day: Int) async throws -> SevereProbability {
+        let data = try await fetch(Self.url(hazard, day: day), issuer: "SPC", timeout: 20)
+        return try OutlookParser.spcProbability(data, hazard: hazard, day: day)
+    }
+
+    private func fetch(_ url: URL, issuer: String, timeout: TimeInterval) async throws -> Data {
+        var request = URLRequest(url: url)
+        request.timeoutInterval = timeout
         request.setValue("(Vane, \(contact))", forHTTPHeaderField: "User-Agent")
         // Reissued several times a day under the same URL; a cached copy is how
         // this morning's outlook would be shown as this afternoon's.
         request.cachePolicy = .reloadIgnoringLocalCacheData
         let (data, response) = try await session.data(for: request)
         if let http = response as? HTTPURLResponse, !(200..<300).contains(http.statusCode) {
-            throw Failure.badResponse(issuer: product.issuer, status: http.statusCode)
+            throw Failure.badResponse(issuer: issuer, status: http.statusCode)
         }
-        switch product {
-        case .severeStorms:  return try OutlookParser.spc(data, period: period)
-        case .excessiveRain: return try OutlookParser.wpc(data, period: period)
-        case .rainTotals:    return try OutlookParser.wpcRainTotals(data, period: period)
-        }
+        return data
     }
 }

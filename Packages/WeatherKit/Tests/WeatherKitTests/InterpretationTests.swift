@@ -289,4 +289,37 @@ final class InterpretationTests: XCTestCase {
         XCTAssertTrue(report.headline.contains("jacket"), report.headline)
         XCTAssertFalse(report.hours.isEmpty)
     }
+
+    /// The Forecast page's hours: the rest of today and the next two days,
+    /// whole — not the Now strip's fixed 24, and not day four.
+    func testThreeDaysRunsToTheEndOfTheThirdDay() {
+        var forecast = BetterForecast()
+        forecast.currentConditions = CurrentConditions()
+        let base = 1_600_000_000
+        // Starts at 6 PM on day 1; four local days of hours.
+        var hours: [HourlyForecast] = []
+        for i in 0..<(6 + 24 * 3) {
+            var h = HourlyForecast()
+            h.time = base + i * 3600
+            h.localDay = 1 + (18 + i) / 24
+            h.localHour = (18 + i) % 24
+            h.airTemperature = 70
+            hours.append(h)
+        }
+        var daily: [DailyForecast] = []
+        for n in 1...4 {
+            var d = DailyForecast()
+            d.dayNum = n
+            d.dayStartLocal = base - 18 * 3600 + (n - 1) * 86_400
+            daily.append(d)
+        }
+        forecast.forecast = Forecast(daily: daily, hourly: hours)
+
+        let report = WeatherInterpreter.report(from: forecast,
+                                               now: Date(timeIntervalSince1970: TimeInterval(base)))
+        XCTAssertEqual(report.hours.count, 24)
+        // 6 hours of today + 24 + 24.
+        XCTAssertEqual(report.threeDays.count, 54)
+        XCTAssertEqual(report.threeDays.last?.epoch, base + 53 * 3600)
+    }
 }

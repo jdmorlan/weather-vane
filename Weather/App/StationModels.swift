@@ -53,6 +53,10 @@ final class StationModels: ObservableObject {
     /// the home point, and it answers on an afternoon when the archive has nothing
     /// to say yet.
     let precip = PrecipOutlookModel()
+    /// SPC's and WPC's storm and flood outlooks for the Forecast page, read at
+    /// home. Up here so leaving the page and coming back doesn't re-fetch
+    /// thirteen files; it only polls while the page is open.
+    let storms = StormOutlookModel()
     /// The 500 mb pattern. Nothing to do with the station — a different source
     /// (the GFS), a different clock (four runs a day), and it works with no
     /// Tempest configured at all, which is why Pattern is its own destination.

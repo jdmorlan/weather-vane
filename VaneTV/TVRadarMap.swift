@@ -18,10 +18,28 @@
 //  a missing tile drawn from its parent while it renders. `FieldRenderer.swift`
 //  is compiled into this target from the Mac's sources; see project.yml.
 //
-//  WHO MOVES THE LOOP. Not this view — it appears twice at once (the deck's card
-//  face and the full-screen page), and two drivers would run the loop at double
-//  speed. `TVLoopDriver` owns the one display link that ticks the clock; each
-//  map only reads the playhead on its own refreshes and applies it.
+//  WHO MOVES THE LOOP. Not this view. `TVLoopDriver` owns the one display link
+//  that ticks the clock; the map only reads the playhead on its own refreshes
+//  and applies it.
+//
+//  PAUSED, NOT HIDDEN, OFF THE MAP TAB. The map stays mounted behind the tabs
+//  (see `MapTab.swift` for why), so on Now and Forecast it is transparent
+//  rather than gone — and its two display links used to go on ticking at
+//  60 Hz under it, applying a loop nobody could see. `isActive` pauses both.
+//  Measured on an Apple TV 4K sitting on Now: 0% CPU. The scans still
+//  download and decode, so the loop is ready when you come back.
+//
+//  THE OUTLOOKS DRAW ON THE SAME MAP, through the Mac's `RegionOverlay`: the
+//  whole outlook as one overlay with one renderer. Not one `MKPolygon` per
+//  shape — tried, and a seven-day rain total, thousands of rings, took the app
+//  from 700 MB to 1.5 GB each time it came up. While an outlook is up the
+//  radar comes off the map entirely — its two overlays removed, its clock
+//  paused — rather than being drawn underneath where nobody could read either.
+//
+//  NOT `isHidden`. Tried: hiding the MKMapView made MapKit drop its 4K
+//  drawing and build it again on the next switch, and the app went from 950
+//  MB to 1.5 GB in a second and was killed — the very spike the backdrop
+//  exists to avoid.
 //
 
 import SwiftUI
@@ -49,6 +67,14 @@ final class TVLoopDriver: ObservableObject {
 
     func stop() { link?.invalidate(); link = nil; last = nil }
 
+    /// Holds the playhead where it is while the map is out of sight.
+    func pause(_ paused: Bool) {
+        link?.isPaused = paused
+        // The next tick after a pause measures from itself, not from when the
+        // pause began, so the loop does not leap forward on return.
+        last = nil
+    }
+
     @objc private func tick(_ link: CADisplayLink) {
         let now = link.timestamp
         defer { last = now }
@@ -69,9 +95,17 @@ struct TVRadarMap: UIViewRepresentable {
     let radiusMeters: Double
     let radar: RadarModel
     let hazards: [Hazard]
-    /// The radar's reach and beam-height rings. Passed only on the full-screen
-    /// detail — on a card face the labels would be unreadable at ten feet.
+    /// The radar's reach and beam-height rings.
     var coverage: RadarCoverage? = nil
+    /// False while another tab is showing. See the header.
+    var isActive = true
+    /// False while an outlook is showing instead of the radar.
+    var showsRadar = true
+    /// The storm or flooding-rain outlook to draw, when one is chosen.
+    var outlook: Outlook? = nil
+    /// The home state's counties and its edge, over every view.
+    var counties: BoundarySet? = nil
+    var stateOutline: BoundarySet? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(radar: radar) }
 
@@ -106,6 +140,8 @@ struct TVRadarMap: UIViewRepresentable {
     func updateUIView(_ map: MKMapView, context: Context) {
         let c = context.coordinator
         c.radar = radar
+        c.showsRadar = showsRadar
+        c.setActive(isActive && showsRadar)
 
         if c.appliedCenter?.latitude != center.latitude
             || c.appliedCenter?.longitude != center.longitude
@@ -154,6 +190,40 @@ struct TVRadarMap: UIViewRepresentable {
             c.installedCoverage = coverage
         }
 
+        // --- Counties and the state's edge ---
+        let lineIDs = [counties?.id, stateOutline?.id].compactMap { $0 }
+        if c.installedLines != lineIDs {
+            for overlay in map.overlays where overlay is BoundaryOverlay { map.removeOverlay(overlay) }
+            // Over the radar and the outlooks, as on the Mac: the lines are
+            // how you read which counties a picture covers.
+            for set in [counties, stateOutline].compactMap({ $0 }) {
+                map.addOverlay(BoundaryOverlay(set), level: .aboveLabels)
+            }
+            c.installedLines = lineIDs
+        }
+
+        // --- Outlook areas ---
+        let outlookID = outlook.map { "\($0.product)-\($0.period)-\($0.issued?.timeIntervalSince1970 ?? 0)" }
+        if c.installedOutlook != outlookID {
+            for overlay in map.overlays where overlay is RegionOverlay { map.removeOverlay(overlay) }
+            if let outlook, !outlook.areas.isEmpty, let outlookID {
+                // Rain totals are read by colour, the outlooks by their edge —
+                // the Mac's weights, with heavier edges for across a room.
+                let isAmount = outlook.product == .rainTotals
+                let set = RegionSet(id: outlookID, fillOpacity: isAmount ? 0.6 : 0.55,
+                                    strokeWidth: isAmount ? 1 : 3,
+                                    regions: outlook.areas.map { area in
+                    (rings: area.shape.rings.map { ring in
+                        ring.map { CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude) }
+                     },
+                     fill: area.fill.cgColor, stroke: area.stroke.cgColor)
+                })
+                // Below the labels, so the towns stay readable.
+                map.addOverlay(RegionOverlay(set), level: .aboveRoads)
+            }
+            c.installedOutlook = outlookID
+        }
+
         // --- The field ---
         c.installField(on: map)
         c.apply()
@@ -166,6 +236,10 @@ struct TVRadarMap: UIViewRepresentable {
         var appliedRadius: Double?
         var installedOutlines: [String] = []
         var installedCoverage: RadarCoverage?
+        var installedOutlook: String?
+        var installedLines: [String] = []
+        /// While false the radar's overlays are off the map. See the header.
+        var showsRadar = true
 
         /// The source the two slots were built for. A different site is a
         /// different source, and gets fresh overlays.
@@ -189,10 +263,53 @@ struct TVRadarMap: UIViewRepresentable {
 
         func detach() { link?.invalidate(); link = nil }
 
+        /// Off the Map tab the map still redraws when the layout around it
+        /// changes, and each redraw reported tiles that were then prefetched
+        /// for every scan — measured, a switch to Now asked for 690 MB.
+        private var isActive = true
+
+        func setActive(_ active: Bool) {
+            isActive = active
+            link?.isPaused = !active
+        }
+
+        /// ONE ZOOM AT A TIME. The camera only moves when the range changes,
+        /// and then it animates through the zooms in between; each reported
+        /// its tiles, and kept in one list they asked for three times what the
+        /// cache holds. A report at a new zoom replaces the list; the same zoom
+        /// adds to it, because a single redraw reports only part of the screen.
+        private func saw(_ reported: [FieldTileGrid.Tile]) {
+            guard let z = reported.map(\.z).max() else { return }
+            let tiles = reported.filter { $0.z == z }
+            if visibleTiles.first?.z != z {
+                visibleTiles = tiles
+            } else {
+                let known = Set(visibleTiles)
+                let grown = known.union(tiles)
+                guard grown.count > known.count else { return }
+                visibleTiles = Array(grown)
+            }
+            prefetch(visibleTiles)
+        }
+
+        /// A NEW RANGE IS A NEW PICTURE, so the list of tiles the loop
+        /// prefetches starts again once the camera has arrived. Without this
+        /// every range you had ever looked at stayed in the list, and so did
+        /// every zoom the animation passed through on the way: measured on the
+        /// TV, walking the ranges took one loop's request from 270 MB to 990 MB,
+        /// far past the tile cache, and the tiles were redrawn forever.
+        ///
+        /// On ARRIVAL, not on the request. Cleared when the range was picked,
+        /// the zooms in between piled straight back in.
+        func mapView(_ mapView: MKMapView, regionDidChangeAnimated animated: Bool) {
+            visibleTiles = []
+            prefetchedStamps = []
+        }
+
         /// Two overlays for the current site: the frame leaving and the frame
         /// arriving. Rebuilt only when the site changes.
         func installField(on map: MKMapView) {
-            let source = radar.fieldSource
+            let source = showsRadar ? radar.fieldSource : nil
             guard source?.id != installedSource else { return }
             for overlay in map.overlays where overlay is FieldOverlay { map.removeOverlay(overlay) }
             slots = [:]
@@ -253,16 +370,23 @@ struct TVRadarMap: UIViewRepresentable {
             if let field = overlay as? FieldOverlay {
                 if let existing = slots[field.slot] { return existing }
                 let renderer = FieldRenderer(overlay: field)
-                let scale = mapView.traitCollection.displayScale
-                renderer.tileScale = Double(scale > 0 ? scale : 1)
+                // AT MOST ONE TILE PIXEL PER POINT, never more. Two things
+                // pushed it past that, both measured on the TV:
+                //   · the zoom is rounded to the nearest level, so a range could
+                //     land at 1.4 pixels per point — twice the tiles each way;
+                //   · MapKit's zoom scale here counts the 4K screen's PIXELS, two
+                //     per point, so a scale of 1 was really 2.
+                // Close drew at z11 with 45 tiles a scan; the loop asked for
+                // 675 MB of tiles, and the app is killed at about 1.3 GB.
+                // 1/(2√2) undoes the pixels and turns the rounding into a floor:
+                // 0.5 to 1 tile pixel per point at every range. Level II gates
+                // are 250 m apart, coarser than a point at every range but
+                // Regional, so the field loses nothing it had.
+                renderer.tileScale = 1 / (2 * 2.0.squareRoot())
                 renderer.onVisibleTiles = { [weak self] tiles, _ in
                     DispatchQueue.main.async {
-                        guard let self else { return }
-                        let known = Set(self.visibleTiles)
-                        let grown = known.union(tiles)
-                        guard grown.count > known.count else { return }
-                        self.visibleTiles = Array(grown)
-                        self.prefetch(self.visibleTiles)
+                        guard let self, self.isActive else { return }
+                        self.saw(tiles)
                     }
                 }
                 slots[field.slot] = renderer
@@ -284,6 +408,18 @@ struct TVRadarMap: UIViewRepresentable {
                     renderer.lineDashPattern = [10, 10]
                 }
                 return renderer
+            }
+            if let lines = overlay as? BoundaryOverlay {
+                // Heavier than the Mac's hairlines, for across a room. The
+                // state's edge holds at every zoom; counties fade out when the
+                // map is wide enough to make them a mesh.
+                let isState = lines.set.id.hasPrefix("state-")
+                return BoundaryRenderer(boundary: lines,
+                                        ink: UIColor.white.withAlphaComponent(isState ? 0.85 : 0.4).cgColor,
+                                        width: isState ? 3 : 1.4, fades: !isState)
+            }
+            if let region = overlay as? RegionOverlay {
+                return RegionRenderer(region: region)
             }
             if let polygon = overlay as? TVHazardPolygon {
                 let renderer = MKPolygonRenderer(polygon: polygon)

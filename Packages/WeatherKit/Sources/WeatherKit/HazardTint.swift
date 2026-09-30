@@ -41,3 +41,10 @@ extension HazardWatch.State {
         return []
     }
 }
+
+extension OutlookColor {
+    /// SPC's and WPC's own colours for an outlook category. Here rather than
+    /// in the Mac's map code for the same reason as the ramp above: the TV's
+    /// forecast draws the same "Slight" in the same yellow.
+    public var color: Color { Color(.sRGB, red: red, green: green, blue: blue) }
+}

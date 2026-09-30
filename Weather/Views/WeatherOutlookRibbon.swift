@@ -50,7 +50,9 @@ struct OutlookRibbon: View {
 
     private static let partSlots = ["Overnight", "Morning", "Afternoon", "Evening"]
 
-    init(days: [DayNote], timezone: TimeZone?) {
+    /// `firstIsToday` is false for the Forecast page's long range, which
+    /// starts on day four.
+    init(days: [DayNote], timezone: TimeZone?, firstIsToday: Bool = true) {
         self.days = days
 
         let md = DateFormatter()
@@ -59,7 +61,7 @@ struct OutlookRibbon: View {
         md.dateFormat = "M/d"
         self.labels = days.enumerated().map { i, d in
             let date = Date(timeIntervalSince1970: TimeInterval(d.epoch))
-            return (i == 0 ? "TODAY" : d.weekday.uppercased(),
+            return (i == 0 && firstIsToday ? "TODAY" : d.weekday.uppercased(),
                     md.string(from: date))
         }
 

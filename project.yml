@@ -137,6 +137,13 @@ targets:
       # draws through the same two-slot dissolve. It has no platform code.
       - Weather/Views/FieldRenderer.swift
       - Weather/Views/SweepTrail.swift
+      # The Forecast page's figure and its storm outlooks, for the same reason:
+      # one three-day chart, drawn at ten-foot size on the TV.
+      - Weather/Views/ThreeDayTimeline.swift
+      - Weather/Views/StormOutlookModel.swift
+      # The outlook areas as ONE overlay, as on the Mac. One MapKit polygon per
+      # shape took a seven-day rain total — thousands of rings — to 1.5 GB.
+      - Weather/Views/MapShapes.swift
     dependencies:
       - package: WeatherKit
     settings:

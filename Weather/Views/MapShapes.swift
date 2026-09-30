@@ -167,9 +167,13 @@ final class BoundarySet: @unchecked Sendable {
     let rings: [[MKMapPoint]]
     let bounds: [MKMapRect]
     let boundingMapRect: MKMapRect
+    /// False for lines that do not close on themselves — a state's edge,
+    /// assembled from the county edges only one county has.
+    let closed: Bool
 
-    init(id: String, rings: [[GeoPoint]]) {
+    init(id: String, rings: [[GeoPoint]], closed: Bool = true) {
         self.id = id
+        self.closed = closed
         let converted = rings.map { ring in
             ring.map { MKMapPoint(CLLocationCoordinate2D(latitude: $0.latitude, longitude: $0.longitude)) }
         }
@@ -195,10 +199,16 @@ final class BoundaryOverlay: NSObject, MKOverlay {
 final class BoundaryRenderer: MKOverlayRenderer {
     private let set: BoundarySet
     private let ink: CGColor
+    private let width: CGFloat
+    private let fades: Bool
 
-    init(boundary: BoundaryOverlay, ink: CGColor) {
+    /// `width` in screen points. `fades: false` for an outline that should
+    /// stay at every zoom, where counties thin out into a mesh.
+    init(boundary: BoundaryOverlay, ink: CGColor, width: CGFloat = 0.8, fades: Bool = true) {
         set = boundary.set
         self.ink = ink
+        self.width = width
+        self.fades = fades
         super.init(overlay: boundary)
     }
 
@@ -210,10 +220,12 @@ final class BoundaryRenderer: MKOverlayRenderer {
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
         let pointsPerMeter = MKMapPointsPerMeterAtLatitude(mapRect.origin.coordinate.latitude)
         let kmPerScreenPoint = 1 / zoomScale / pointsPerMeter / 1000
-        let fade = 1 - min(1, max(0, (kmPerScreenPoint - Self.fullBelow) / (Self.goneAbove - Self.fullBelow)))
+        let fade = fades
+            ? 1 - min(1, max(0, (kmPerScreenPoint - Self.fullBelow) / (Self.goneAbove - Self.fullBelow)))
+            : 1
         guard fade > 0.02 else { return }
 
-        let lineWidth = 0.8 / zoomScale
+        let lineWidth = width / zoomScale
         // A vertex closer than half a screen point to the last one drawn adds
         // nothing a person can see, and at state scale it is most of them.
         let tolerance = 0.5 / zoomScale
@@ -229,7 +241,7 @@ final class BoundaryRenderer: MKOverlayRenderer {
                 path.addLine(to: point(for: p))
                 last = p
             }
-            path.addLine(to: point(for: first))
+            if set.closed { path.addLine(to: point(for: first)) }
         }
         guard !path.isEmpty else { return }
         context.addPath(path)
@@ -246,6 +258,4 @@ extension OutlookColor {
     var cgColor: CGColor {
         CGColor(srgbRed: red, green: green, blue: blue, alpha: 1)
     }
-
-    var color: Color { Color(.sRGB, red: red, green: green, blue: blue) }
 }

@@ -49,6 +49,10 @@ public struct WeatherReport: Equatable, Sendable {
 
     public var hours: [HourSlice]        // next ~24h strip
     public var days: [DayNote]           // 10-day, interpretation-first
+    /// Every forecast hour from now to the end of the THIRD local day — what's
+    /// left of today and the next two, whole. The Forecast page's timeline.
+    /// Separate from `hours` because that strip is deliberately a fixed 24.
+    public var threeDays: [HourSlice] = []
 }
 
 public struct ComfortNote: Equatable, Sendable {
@@ -235,6 +239,22 @@ public enum WeatherInterpreter {
         }
         let weekComfort = weekComfortSummary(Array(days))
 
+        // Each day's night from ITS OWN sun times, not today's: three days on,
+        // in spring or autumn, sunset has moved by several minutes, and the
+        // shading is what a glance places the rain against.
+        var sunHours: [Int: (rise: Int, set: Int)] = [:]
+        for d in daily.prefix(3) {
+            guard let num = d.dayNum, let rise = d.sunrise, let set = d.sunset else { continue }
+            sunHours[num] = (hour(ofEpoch: rise, calendar: tzCalendar), hour(ofEpoch: set, calendar: tzCalendar))
+        }
+        let firstThree = Set(daily.prefix(3).compactMap(\.dayNum))
+        let threeDays = future
+            .filter { $0.localDay.map(firstThree.contains) ?? false }
+            .map { h -> HourSlice in
+                let sun = h.localDay.flatMap { sunHours[$0] }
+                return hourSlice(h, sunriseHour: sun?.rise ?? sunriseHour, sunsetHour: sun?.set ?? sunsetHour)
+            }
+
         let headline = makeHeadline(cc: cc, comfort: comfort, rain: rain,
                                     wind: wind, pressure: pressure, alerts: alerts,
                                     today: days.first)
@@ -259,7 +279,8 @@ public enum WeatherInterpreter {
             windDirection: cc.windDirection,
             precipToday: cc.precipAccumLocalDay,
             hours: hours,
-            days: Array(days)
+            days: Array(days),
+            threeDays: threeDays
         )
     }
 

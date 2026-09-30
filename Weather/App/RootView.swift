@@ -170,7 +170,7 @@ struct RootView: View {
             } else {
                 needsStation
             }
-        case .now, .rhythms, .rain, .history, .wind, .explore:
+        case .now, .forecast, .rhythms, .rain, .history, .wind, .explore:
             if settings.hasWeatherStation {
                 WeatherView(models: models, destination: destination,
                             navigate: { destination = $0 },

@@ -534,19 +534,5 @@ struct HourlyRibbon: View {
         return kept
     }
 
-    static func smoothPath(_ pts: [CGPoint?]) -> Path {
-        let p = pts.compactMap { $0 }
-        var path = Path()
-        guard let first = p.first else { return path }
-        path.move(to: first)
-        guard p.count > 1 else { return path }
-        for i in 1..<p.count {
-            let prev = p[i - 1], cur = p[i]
-            let midX = (prev.x + cur.x) / 2
-            path.addQuadCurve(to: CGPoint(x: midX, y: (prev.y + cur.y) / 2),
-                              control: CGPoint(x: midX, y: prev.y))
-            path.addQuadCurve(to: cur, control: CGPoint(x: midX, y: cur.y))
-        }
-        return path
-    }
+    static func smoothPath(_ pts: [CGPoint?]) -> Path { SmoothCurve.path(pts) }
 }

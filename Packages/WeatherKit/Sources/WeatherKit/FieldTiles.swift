@@ -303,12 +303,37 @@ public final class FieldTileStore: @unchecked Sendable {
     /// DOWN on screen. The limit now grows to the loop's own size, with room for
     /// the coarse pass, and never shrinks while the app runs.
     private func reserve(bytes: Int) {
-        let wanted = min(Self.ceilingBytes, max(Self.floorBytes, bytes))
         lock.lock(); defer { lock.unlock() }
+        let wanted = min(ceilingBytes, max(floorBytes, bytes))
         if wanted > cache.totalCostLimit {
             radarLog.info("tile cache limit \(self.cache.totalCostLimit / 1_048_576) → \(wanted / 1_048_576) MB")
             cache.totalCostLimit = wanted
         }
+        // A LOOP THE CAP CANNOT HOLD, said once per size. The eviction count
+        // shows the churn; this is the number that explains it.
+        if bytes > ceilingBytes, bytes != lastOverCap {
+            lastOverCap = bytes
+            radarLog.notice("loop wants \(bytes / 1_048_576) MB of tiles; the cap is \(self.ceilingBytes / 1_048_576) MB, so tiles will be redrawn")
+        }
+    }
+
+    private var lastOverCap = 0
+
+    private var floorBytes = FieldTileStore.floorBytes
+    private var ceilingBytes = FieldTileStore.ceilingBytes
+
+    /// A HARD CAP, for a device where an eighth of physical memory is still too
+    /// much. Apple TV 4K has 4 GB and kills an app at about 1.3 GB, and MapKit
+    /// alone takes a third of that at 4K. The Mac's rule — the cache grows to
+    /// hold the loop — would give the tiles 512 MB there, and it did: measured on
+    /// the device, walking the ranges took the app from 440 MB to over a
+    /// gigabyte. Past the cap a large loop re-draws tiles rather than holding
+    /// them, which costs CPU and never costs the app.
+    public func limit(toBytes bytes: Int) {
+        lock.lock(); defer { lock.unlock() }
+        floorBytes = bytes
+        ceilingBytes = bytes
+        cache.totalCostLimit = bytes
     }
 
     private let lock = NSLock()

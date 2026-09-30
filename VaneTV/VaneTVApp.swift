@@ -24,10 +24,21 @@
 //
 
 import SwiftUI
+import WeatherKit
 
 @main
 struct VaneTVApp: App {
     @StateObject private var settings = TVSettings()
+
+    init() {
+        // See `FieldTileStore.limit(toBytes:)`. Sized to hold one range's
+        // ten-scan loop, coarse pass included, at the TV's tile density (see
+        // `TVRadarMap`'s tileScale). Too small and the cache drops tiles as
+        // fast as they are drawn — measured, ~80 a second, four cores busy
+        // for as long as the Map tab was open. Too large and it only holds
+        // ranges nobody is looking at, which the app pays for in memory.
+        FieldTileStore.shared.limit(toBytes: 200 * 1024 * 1024)
+    }
 
     var body: some Scene {
         WindowGroup {

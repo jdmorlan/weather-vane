@@ -16,7 +16,9 @@
 //  is what you expect, WEATHER is what you get, and the record is what you got.
 //
 //    TODAY    a moment, and the days it leads into. Now is this second at the
-//             station and its ten-day; Map is this second over the county —
+//             station and its ten-day; Forecast is the next three days, drawn
+//             for deciding things — rain, wind, storms — with the rest of the
+//             ten days marked as long range; Map is this second over the county —
 //             radar, satellite, fire — and the storms, flooding and rain the
 //             forecasters see coming. All of it stops being true within hours.
 //    CLIMATE  what this place usually does. Rhythms is when things happen here;
@@ -53,6 +55,7 @@ import SwiftUI
 
 enum Destination: String, CaseIterable, Identifiable, Hashable {
     case now = "Now"
+    case forecast = "Forecast"
     case map = "Map"
     case rhythms = "Rhythms"
     case rain = "Rain"
@@ -67,6 +70,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var symbol: String {
         switch self {
         case .now:     return "cloud.sun"
+        case .forecast: return "calendar.day.timeline.left"
         case .map:     return "map"
         case .rhythms: return "repeat"
         case .rain:    return "drop"
@@ -84,6 +88,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var title: String {
         switch self {
         case .now:     return "Right Now"
+        case .forecast: return "Next Three Days"
         case .map:     return "Weather Map"
         case .rhythms: return "Rhythms"
         case .rain:    return "Rain"
@@ -101,6 +106,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var caption: String {
         switch self {
         case .now:     return "Conditions, today's shape, and the ten-day"
+        case .forecast: return "Temperature, rain, wind and storms, three days out"
         case .map:     return "What's around you, and what's on the way"
         case .rhythms: return "When things usually happen here"
         case .rain:    return "How much falls, how often, and how long between"
@@ -122,7 +128,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
 
         var destinations: [Destination] {
             switch self {
-            case .today:   return [.now, .map]
+            case .today:   return [.now, .forecast, .map]
             case .climate: return [.rhythms, .rain, .wind]
             case .record:  return [.history, .explore]
             case .beyond:  return [.pattern]
@@ -141,7 +147,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var needsStation: Bool {
         switch self {
         case .map, .pattern: return false
-        case .now, .rhythms, .rain, .history, .wind, .explore, .station: return true
+        case .now, .forecast, .rhythms, .rain, .history, .wind, .explore, .station: return true
         }
     }
 }

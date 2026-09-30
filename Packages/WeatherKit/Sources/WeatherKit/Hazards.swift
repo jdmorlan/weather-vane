@@ -336,6 +336,18 @@ public struct GeoJSONGeometry: Decodable, Sendable {
     /// different depth per geometry type; `shape()` is where it becomes typed.
     public var coordinates: Nested
 
+    enum CodingKeys: String, CodingKey { case type, coordinates }
+
+    /// SPC WRITES A QUIET DAY AS AN EMPTY `GeometryCollection` — no
+    /// `coordinates` key at all. Required, that key failed the whole file, so a
+    /// day with no hail anywhere read as a failed fetch rather than as no hail.
+    /// Missing coordinates decode as an empty list, and `shape()` returns nil.
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        coordinates = try c.decodeIfPresent(Nested.self, forKey: .coordinates) ?? .list([])
+    }
+
     public func shape() -> GeoShape? {
         switch type {
         case "Polygon":     return coordinates.rings().map { GeoShape.polygon($0) }

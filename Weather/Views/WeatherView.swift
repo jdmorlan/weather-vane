@@ -87,6 +87,7 @@ struct WeatherView: View {
     @ObservedObject private var hazards: WeatherHazardModel
     @ObservedObject private var forecastCheck: ForecastCheckModel
     @ObservedObject private var precip: PrecipOutlookModel
+    @ObservedObject private var storms: StormOutlookModel
 
     /// Which of the four is on screen. A `let` rather than `@State`: the sidebar
     /// owns the selection now, and a second copy of it here would be a second
@@ -130,6 +131,7 @@ struct WeatherView: View {
         hazards = models.hazards
         forecastCheck = models.forecastCheck
         precip = models.precip
+        storms = models.storms
         self.destination = destination
         self.navigate = navigate
         self.openSetup = openSetup
@@ -216,7 +218,10 @@ struct WeatherView: View {
                     // hours carry the numbers; the day's parts are bands over the
                     // same strip.
                     TodayCard(report: r, strip: strip)
-                    if !r.days.isEmpty { TenDayCard(report: r) { forecastGrade } }
+                    // Detail opens the next three days rather than the grade's
+                    // working: the question after reading a ten-day is "tell me
+                    // more about the part I'll act on", not "how has it scored".
+                    if !r.days.isEmpty { TenDayCard(report: r) { forecastGrade(detail: .forecast) } }
                     seasonsCard(r)      // past ten days: what the season does next
                     // The ONE archive card on this page, and it earns the place:
                     // "is today hot for September 16" is a question about today.
@@ -239,6 +244,14 @@ struct WeatherView: View {
                     // inside its grain picker.
                     forecastCheckSection(r)
                     dayShapesSection
+                case .forecast:
+                    // The grade rides along, one line, where it changes how the
+                    // numbers under it are read — and its Detail is the working,
+                    // under History.
+                    ForecastPage(report: r, storms: storms, precip: precip.outlook,
+                                 home: settings.homePoint, openSetup: openSetup) {
+                        forecastGrade(detail: .history)
+                    }
                 case .rhythms:
                     rhythmsSection(r)
                 case .rain:
@@ -749,7 +762,7 @@ struct WeatherView: View {
     /// So the finding rides in the header and the working — day by day, bias,
     /// worst miss — is under History, one click away, where the rest of the
     /// app's self-measurement lives.
-    @ViewBuilder private var forecastGrade: some View {
+    @ViewBuilder private func forecastGrade(detail: Destination) -> some View {
         if let verdict = forecastCheck.verdict {
             HStack(spacing: 8) {
                 Image(systemName: verdict.isReassuring
@@ -760,7 +773,7 @@ struct WeatherView: View {
                 Text(verdict.headline)
                     .font(.caption.weight(.medium))
                 Spacer(minLength: 0)
-                Button("Detail") { navigate(.history) }
+                Button("Detail") { navigate(detail) }
                     .buttonStyle(.link).font(.caption)
             }
         } else if forecastCheck.watchingSince != nil {
@@ -773,7 +786,7 @@ struct WeatherView: View {
                 Text("Keeping score — not enough finished days to grade yet")
                     .font(.caption).foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
-                Button("Detail") { navigate(.history) }
+                Button("Detail") { navigate(detail) }
                     .buttonStyle(.link).font(.caption)
             }
         }
@@ -806,22 +819,7 @@ struct WeatherView: View {
 
     // MARK: Icon mapping (Tempest icon strings → SF Symbols)
 
-    static func symbol(_ icon: String) -> String {
-        switch icon {
-        case "clear-day": return "sun.max.fill"
-        case "clear-night": return "moon.stars.fill"
-        case "partly-cloudy-day", "possibly-cloudy-day": return "cloud.sun.fill"
-        case "partly-cloudy-night", "possibly-cloudy-night": return "cloud.moon.fill"
-        case "cloudy": return "cloud.fill"
-        case "rainy", "possibly-rainy-day", "possibly-rainy-night": return "cloud.rain.fill"
-        case "sleet", "possibly-sleet-day", "possibly-sleet-night": return "cloud.sleet.fill"
-        case "snow", "possibly-snow-day", "possibly-snow-night": return "cloud.snow.fill"
-        case "thunderstorm", "possibly-thunderstorm-day", "possibly-thunderstorm-night": return "cloud.bolt.rain.fill"
-        case "windy": return "wind"
-        case "foggy": return "cloud.fog.fill"
-        default: return "cloud.fill"
-        }
-    }
+    static func symbol(_ icon: String) -> String { WeatherSymbol.name(icon) }
 }
 
 private extension String {

@@ -1,17 +1,17 @@
 //
-//  CardVisuals.swift  (tvOS)
+//  Gauges.swift  (tvOS)
 //
-//  The pictures on the cards.
+//  The small pictures beside the readings on Now.
 //
 //  WHY THESE ARE NOT THE MAC'S. `ComfortGauge`, `DaylightArc` and `WindDial`
 //  already exist over there and do the same jobs. What does not survive the move
 //  is their SIZE: they are built in `.caption` and `.callout`, on strokes of one
-//  and two points, for a card you read at arm's length. Scaled up they are a
+//  and two points, for a Mac card you read at arm's length. Scaled up they are a
 //  hairline and a whisper; overridden font by font they become the Mac view with
 //  a dozen exceptions, which is worse than either.
 //
 //  So the ARITHMETIC is the shared part and it is barely any — a fraction along
-//  a scale, an angle from two timestamps — while the drawing is native to the
+//  a scale, an angle — while the drawing is native to the
 //  room it is in. Where a rule is genuinely shared it lives in WeatherKit
 //  (`dewComfortTag`, the hazard ramp) rather than being restated here.
 //
@@ -85,86 +85,6 @@ struct ComfortScale: View {
             }
         }
         .frame(height: compact ? 30 : 74)
-    }
-}
-
-// MARK: - Sun
-
-/// The day's arc, with the sun where it actually is.
-///
-/// The one thing a sunset time cannot tell you is how much of the day is left,
-/// and that is the whole question on an afternoon that is getting dark early.
-/// Position along the arc answers it before any number is read.
-struct SunArc: View {
-    let sunrise: Date?
-    let sunset: Date?
-    let now: Date
-    var compact = false
-
-    /// 0 at sunrise, 1 at sunset, nil when the sun is down — which is a real
-    /// answer and draws as an arc with no sun on it rather than one pinned to
-    /// an end.
-    private var progress: Double? {
-        guard let sunrise, let sunset, sunset > sunrise else { return nil }
-        let span = sunset.timeIntervalSince(sunrise)
-        let elapsed = now.timeIntervalSince(sunrise)
-        guard elapsed >= 0, elapsed <= span else { return nil }
-        return elapsed / span
-    }
-
-    var body: some View {
-        GeometryReader { geo in
-            let w = geo.size.width, h = geo.size.height
-            let r = min(w / 2, h - (compact ? 6 : 14))
-            let c = CGPoint(x: w / 2, y: h - (compact ? 2 : 8))
-            ZStack {
-                // The path the sun takes, dashed where it has not been yet.
-                Path { p in
-                    p.addArc(center: c, radius: r, startAngle: .degrees(180),
-                             endAngle: .degrees(0), clockwise: false)
-                }
-                .stroke(.white.opacity(0.22),
-                        style: StrokeStyle(lineWidth: compact ? 3 : 4, lineCap: .round,
-                                           dash: [compact ? 3 : 5, compact ? 6 : 10]))
-
-                if let progress {
-                    // The travelled part, solid, so how far through the day you
-                    // are is a length and not an inference.
-                    Path { p in
-                        // TWO CONVENTIONS, AND THEY ARE NOT THE SAME ONE.
-                        // `addArc` measures with y pointing DOWN, so the top of
-                        // the circle is 270° and sunrise→sunset runs 180 → 360.
-                        // The sun's own position below is computed the other way
-                        // (y flipped by hand, top at 90°). Subtracting here —
-                        // correct for the sun — sent the stroke the long way
-                        // round and drew a loop beneath the horizon.
-                        p.addArc(center: c, radius: r, startAngle: .degrees(180),
-                                 endAngle: .degrees(180 + 180 * progress), clockwise: false)
-                    }
-                    .stroke(LinearGradient(colors: [Color(red: 1, green: 0.72, blue: 0.3),
-                                                    Color(red: 1, green: 0.55, blue: 0.2)],
-                                           startPoint: .leading, endPoint: .trailing),
-                            style: StrokeStyle(lineWidth: compact ? 4 : 6, lineCap: .round))
-
-                    let angle = (180 - 180 * progress) * .pi / 180
-                    Circle()
-                        .fill(LinearGradient(colors: [Color(red: 1, green: 0.88, blue: 0.45),
-                                                      Color(red: 1, green: 0.6, blue: 0.22)],
-                                             startPoint: .top, endPoint: .bottom))
-                        .frame(width: compact ? 16 : 26, height: compact ? 16 : 26)
-                        .shadow(color: Color(red: 1, green: 0.6, blue: 0.2).opacity(0.7),
-                                radius: compact ? 6 : 12)
-                        .position(x: c.x + r * cos(angle), y: c.y - r * sin(angle))
-                }
-
-                // The horizon, so the arc has something to rise from.
-                Path { p in
-                    p.move(to: CGPoint(x: c.x - r, y: c.y))
-                    p.addLine(to: CGPoint(x: c.x + r, y: c.y))
-                }
-                .stroke(.white.opacity(0.28), lineWidth: 1.5)
-            }
-        }
     }
 }
 
@@ -260,89 +180,7 @@ extension String {
     }
 }
 
-// MARK: - Sparklines
-
-/// The next twelve hours as a shape. Temperature is a LINE rather than twelve
-/// figures because on a face the only question is which way it is going.
-struct HourSparkline: View {
-    let hours: [HourSlice]
-
-    var body: some View {
-        GeometryReader { geo in
-            let temps = hours.compactMap(\.temperature)
-            if let lo = temps.min(), let hi = temps.max(), hi > lo, hours.count > 1 {
-                let w = geo.size.width, h = geo.size.height
-                let points = hours.enumerated().compactMap { index, hour -> CGPoint? in
-                    guard let t = hour.temperature else { return nil }
-                    return CGPoint(x: w * Double(index) / Double(hours.count - 1),
-                                   y: h - h * (t - lo) / (hi - lo))
-                }
-                ZStack(alignment: .bottomLeading) {
-                    // Filled under the line: the area is what makes a shallow
-                    // slope legible at a glance on a small face.
-                    Path { p in
-                        guard let first = points.first else { return }
-                        p.move(to: CGPoint(x: first.x, y: h))
-                        for point in points { p.addLine(to: point) }
-                        p.addLine(to: CGPoint(x: points.last?.x ?? w, y: h))
-                        p.closeSubpath()
-                    }
-                    .fill(LinearGradient(colors: [.orange.opacity(0.35), .orange.opacity(0.03)],
-                                         startPoint: .top, endPoint: .bottom))
-                    Path { p in
-                        guard let first = points.first else { return }
-                        p.move(to: first)
-                        for point in points.dropFirst() { p.addLine(to: point) }
-                    }
-                    .stroke(.orange, style: StrokeStyle(lineWidth: 3, lineCap: .round,
-                                                        lineJoin: .round))
-                    // Any hour with a real chance of rain, marked. The shape says
-                    // temperature; these say whether to care about the shape.
-                    ForEach(Array(hours.enumerated()), id: \.offset) { index, hour in
-                        if (hour.precipProbability ?? 0) >= 40, index < points.count {
-                            Circle().fill(.cyan)
-                                .frame(width: 7, height: 7)
-                                .position(x: points[index].x, y: h - 4)
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Five days as paired high/low bars on one scale, so a cooling trend is a slope
-/// rather than ten numbers to compare in your head.
-struct DaySparkline: View {
-    let days: [DayNote]
-
-    var body: some View {
-        GeometryReader { geo in
-            let values = days.flatMap { [$0.high, $0.low].compactMap { $0 } }
-            if let lo = values.min(), let hi = values.max(), hi > lo {
-                let h = geo.size.height
-                HStack(alignment: .bottom, spacing: 8) {
-                    ForEach(Array(days.enumerated()), id: \.offset) { _, day in
-                        VStack(spacing: 2) {
-                            // One bar spanning low to high rather than two bars:
-                            // the SPREAD is the day, and two bars invite reading
-                            // them as separate quantities.
-                            Capsule()
-                                .fill(LinearGradient(colors: [.orange.opacity(0.9),
-                                                              .blue.opacity(0.7)],
-                                                     startPoint: .top, endPoint: .bottom))
-                                .frame(width: 10,
-                                       height: max(6, h * (((day.high ?? lo) - (day.low ?? lo))
-                                                           / (hi - lo))))
-                                .offset(y: -h * (((day.low ?? lo) - lo) / (hi - lo)))
-                        }
-                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .bottom)
-                    }
-                }
-            }
-        }
-    }
-}
+// MARK: - Rain
 
 /// What has fallen against what is still expected. Two lengths on one scale,
 /// because "0.4 so far, 1.2 expected" is a ratio and a ratio wants a picture.
