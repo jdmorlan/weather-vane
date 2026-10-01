@@ -16,6 +16,11 @@
 //  whole mechanism by which a phone never backfills an archive: the code that
 //  would do it is in the binary, and nothing here ever constructs it.
 //
+//  IT TURNS, AND WHAT TURNING MEANS DEPENDS ON THE TAB. Now on its side is
+//  the next three days; the map on its side is a wider map, which in Houston
+//  is the useful direction — lines come in from the west, and landscape shows
+//  what is behind them.
+//
 //  Shaped like VaneTV's models for the same reason VaneTV is: fetched now, kept
 //  for minutes. See [[iphone-app-is-live-only]] in the project memory.
 //
@@ -30,11 +35,16 @@ final class PhoneModels: ObservableObject {
     let weather = WeatherModel()
     let today = DayObservationsModel()
     let hazards = WeatherHazardModel()
+    /// SPC's and WPC's outlooks, for the storm lane in the forecast. Loaded
+    /// with everything else so turning the phone finds them already read;
+    /// `load` keeps its own ten-minute floor, so this costs nothing extra.
+    let storms = StormOutlookModel()
 
     func refresh(settings: AppSettings) async {
         await weather.refresh(token: settings.tempestToken, stationID: settings.tempestStationID)
         await hazards.refresh(settings: settings)
         await loadToday(settings: settings)
+        await storms.load()
     }
 
     /// Today's minutes, for the strip and the rain card. The key folds in a
@@ -56,6 +66,10 @@ struct PhoneRoot: View {
     @EnvironmentObject private var settings: AppSettings
     @StateObject private var models = PhoneModels()
     @Environment(\.scenePhase) private var scenePhase
+    /// Compact height is an iPhone on its side — the only way this root is
+    /// ever short. See `PhoneForecastView` for what Now does with it.
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
+    private var isLandscape: Bool { verticalSizeClass == .compact }
 
     @State private var showingSetup = false
     @State private var showingSettings = false
@@ -71,11 +85,21 @@ struct PhoneRoot: View {
             Tab(Destination.now.rawValue, systemImage: Destination.now.symbol) {
                 NavigationStack {
                     PhoneNowView(weather: models.weather, today: models.today,
-                                 hazards: models.hazards,
+                                 hazards: models.hazards, storms: models.storms,
                                  refresh: { await models.refresh(settings: settings) },
                                  openSetup: { showingSetup = true })
                         .toolbar { settingsButton }
                 }
+                // OVER NOW, NOT INSTEAD OF IT, so turning the phone back finds
+                // the scroll where it was left. The tab and status bars go, so
+                // the figure has the whole short screen.
+                .overlay {
+                    if isLandscape {
+                        PhoneForecastFigure(weather: models.weather, storms: models.storms)
+                    }
+                }
+                .toolbar(isLandscape ? .hidden : .visible, for: .tabBar)
+                .statusBarHidden(isLandscape)
             }
             Tab(Destination.map.rawValue, systemImage: Destination.map.symbol) {
                 MapSurfaceView()

@@ -129,10 +129,14 @@ targets:
           UIInterfaceOrientationPortraitUpsideDown
           UIInterfaceOrientationLandscapeLeft
           UIInterfaceOrientationLandscapeRight
-        # The phone is portrait only: a scroll of cards held in one hand. The
-        # multitasking rule above does not reach it — an iPhone app has no Split
-        # View pane to refuse.
-        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: UIInterfaceOrientationPortrait
+        # The phone turns, and turning means something: Now on its side becomes
+        # the three-day forecast, which needs the width, and the map gets wider.
+        # Not upside-down — a phone with a notch held that way is never on
+        # purpose. See PhoneRoot.
+        INFOPLIST_KEY_UISupportedInterfaceOrientations_iPhone: >-
+          UIInterfaceOrientationPortrait
+          UIInterfaceOrientationLandscapeLeft
+          UIInterfaceOrientationLandscapeRight
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         MARKETING_VERSION: "0.1"
         # Answered in the build so App Store Connect stops asking on every

@@ -123,6 +123,7 @@ struct MapSurfaceView: View {
     @State private var showingLayers = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
+    @Environment(\.verticalSizeClass) private var verticalSizeClass
     #endif
     /// Additive. See `MapLayerRole.context`.
     @State private var context: Set<String> = ["warnings", "home", "coverage", "counties"]
@@ -226,11 +227,15 @@ struct MapSurfaceView: View {
             // The padding lives here, not on the timeline: the timeline is absent
             // under the fire view, and a status bar flush against the
             // bottom of the window looks like a mistake.
-            VStack(spacing: 8) {
+            // ON A PHONE ON ITS SIDE the status rides beside the timeline, not
+            // above it: stacked, the two took a third of a 390pt-tall map.
+            let layout = isShort ? AnyLayout(HStackLayout(alignment: .bottom, spacing: 8))
+                                 : AnyLayout(VStackLayout(spacing: 8))
+            layout {
                 status
                 timeline
             }
-            .padding(.bottom, 16)
+            .padding(.bottom, isShort ? 6 : 16)
             // On whether there IS a status, not on its content. Animating the
             // whole value crossfaded every text change in place — the old line
             // and the new one drawn over each other four times a second.
@@ -270,7 +275,10 @@ struct MapSurfaceView: View {
         .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
         .onChange(of: settings.homeLat) { _, _ in radar.site = resolvedSite }
         .onChange(of: radarModeChoice) { _, new in radar.mode = new }
-        .sheet(isPresented: $showingLayers) {
+        // Never on its side: there a sheet opens full height and hides the very
+        // map it changes, so the panel drops down under its button instead.
+        .sheet(isPresented: Binding(get: { showingLayers && !isShort },
+                                    set: { showingLayers = $0 })) {
             ScrollView {
                 panel(fillsWidth: true).padding(20)
             }
@@ -809,25 +817,51 @@ struct MapSurfaceView: View {
     /// width the corner holds one button naming what is on screen — "Radar",
     /// not a generic layers glyph, because which picture you are looking at is
     /// the first thing the map owes you — and the same panel opens as a sheet.
+    ///
+    /// ON ITS SIDE the button stays — a Pro Max in landscape reports a regular
+    /// width, and the full panel there sat over a third of the map — but it
+    /// drops the panel down beneath itself rather than raising a sheet.
     @ViewBuilder private var controls: some View {
         if isCompact {
-            Button { showingLayers = true } label: {
-                Label(surface.label, systemImage: surface.symbol)
-                    .font(.callout.weight(.medium))
-                    .padding(.horizontal, 14).padding(.vertical, 9)
-                    .background(.regularMaterial, in: Capsule())
-                    .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+            VStack(alignment: .trailing, spacing: 8) {
+                layersButton
+                if isShort && showingLayers {
+                    ViewThatFits(in: .vertical) {
+                        panel(fillsWidth: false)
+                        ScrollView { panel(fillsWidth: false) }
+                    }
+                }
             }
-            .buttonStyle(.plain)
-            .accessibilityHint("Choose what the map shows")
         } else {
             panel(fillsWidth: false)
         }
     }
 
+    private var layersButton: some View {
+        Button { if isShort { showingLayers.toggle() } else { showingLayers = true } } label: {
+            Label(surface.label, systemImage: surface.symbol)
+                .font(.callout.weight(.medium))
+                .padding(.horizontal, 14).padding(.vertical, 9)
+                .background(.regularMaterial, in: Capsule())
+                .overlay(Capsule().strokeBorder(Color.primary.opacity(0.08)))
+        }
+        .buttonStyle(.plain)
+        .accessibilityHint("Choose what the map shows")
+    }
+
     private var isCompact: Bool {
         #if os(iOS)
-        return sizeClass == .compact
+        return sizeClass == .compact || isShort
+        #else
+        return false
+        #endif
+    }
+
+    /// An iPhone on its side, and nothing else: an iPad's height is regular
+    /// in every orientation and every Split View pane, and the Mac has none.
+    private var isShort: Bool {
+        #if os(iOS)
+        return verticalSizeClass == .compact
         #else
         return false
         #endif

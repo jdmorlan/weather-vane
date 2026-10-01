@@ -12,7 +12,7 @@
 //
 //  ORDER, top to bottom: anything the NWS is warning about, then the station's
 //  own alerts, then this second, then the rain if there is any, then the rest of
-//  today, then the ten days. The same order as the Mac, with the gaps closed.
+//  today, then the way into the next three days, then the ten days. The same order as the Mac, with the gaps closed.
 //
 
 import SwiftUI
@@ -22,6 +22,9 @@ struct PhoneNowView: View {
     @ObservedObject var weather: WeatherModel
     @ObservedObject var today: DayObservationsModel
     @ObservedObject var hazards: WeatherHazardModel
+    /// Only handed on to the forecast; this view draws nothing from it, so it
+    /// is not observed here.
+    let storms: StormOutlookModel
     @EnvironmentObject private var settings: AppSettings
 
     /// Pull to refresh. A closure rather than the models object, so this view
@@ -68,7 +71,10 @@ struct PhoneNowView: View {
                 RightNowCard(report: r, strip: strip, rainRate: today.rain?.currentRate)
                 rainCard
                 TodayCard(report: r, strip: strip)
-                if !r.days.isEmpty { TenDayCard(report: r) }
+                if !r.days.isEmpty {
+                    forecastLink
+                    TenDayCard(report: r)
+                }
             }
             .padding(16)
         }
@@ -84,6 +90,27 @@ struct PhoneNowView: View {
             Text("Couldn’t read today’s rain — \(error)")
                 .font(.caption).foregroundStyle(.tertiary)
         }
+    }
+
+    /// The way into the three days without turning the phone — and the only
+    /// place that says turning it is an option.
+    private var forecastLink: some View {
+        NavigationLink {
+            PhoneForecastPage(weather: weather, storms: storms, openSetup: openSetup)
+        } label: {
+            StationCard(label: "Next three days") {
+                HStack {
+                    VStack(alignment: .leading, spacing: 3) {
+                        Text("Hour by hour: temperature, rain, wind and storms")
+                        Text("Or turn your phone sideways")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    Image(systemName: "chevron.right").foregroundStyle(.tertiary)
+                }
+            }
+        }
+        .buttonStyle(.plain)
     }
 
     private var needsStation: some View {
