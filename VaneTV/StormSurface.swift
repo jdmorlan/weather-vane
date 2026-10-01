@@ -63,8 +63,14 @@ struct StormSurface: View {
     @State private var layer: TVMapLayer = .radar
     @State private var outlookDay = 1
 
-    private var nearestSite: RadarSite? {
-        settings.homePoint.flatMap {
+    /// WHICH RADAR, stored as the Mac stores it: "auto" for the site nearest
+    /// home, or an ICAO. Per device, not synced.
+    @AppStorage("radarSite") private var radarSiteChoice: String = "auto"
+
+    /// Anything that is not a known site means the one nearest home.
+    private var resolvedSite: RadarSite? {
+        if let chosen = RadarSites.site(radarSiteChoice) { return chosen }
+        return settings.homePoint.flatMap {
             RadarSites.nearest(latitude: $0.latitude, longitude: $0.longitude).first
         }
     }
@@ -82,7 +88,7 @@ struct StormSurface: View {
             }
             Tab("Map", systemImage: "map", value: .map) {
                 MapTab(radar: radar, storms: storms, totals: rainTotals, hasHome: settings.hasHome,
-                       home: settings.homePoint,
+                       home: settings.homePoint, radarSite: $radarSiteChoice,
                        range: $range, layer: $layer, day: $outlookDay)
             }
             // A forecaster on the air with a storm, said in the tab's own name
@@ -102,18 +108,26 @@ struct StormSurface: View {
                         layer: layer, day: outlookDay,
                         isActive: tab == .map)
         }
-        // In the tab bar's row, at the left, where it takes no height.
-        .overlay(alignment: .topLeading) {
-            if let worst = hazards.worst {
-                HazardBannerTV(hazard: worst, others: hazards.active.count - 1)
-                    .padding(.leading, 80)
+        // In the tab bar's row — the warning at the left, the radar's age at
+        // the right while the loop is up — where they take no height. Both are
+        // centred on the tab bar itself; see `TVTabBarRow`.
+        .overlay(alignment: .top) {
+            HStack(spacing: 0) {
+                if let worst = hazards.worst {
+                    HazardBannerTV(hazard: worst, others: hazards.active.count - 1)
+                }
+                Spacer(minLength: 0)
+                if tab == .map && layer == .radar && settings.hasHome {
+                    RadarClockPill(radar: radar, range: range)
+                }
             }
+            .tabBarRow()
         }
         .background(Color.black)
-        // The radar nearest home, drawn from its own Level II scans. No picker
-        // on the TV: from a sofa the nearest site is the right answer.
-        .onAppear { radar.site = nearestSite }
-        .onChange(of: settings.homeLat) { _, _ in radar.site = nearestSite }
+        // The radar nearest home unless another was chosen on the Map tab.
+        .onAppear { radar.site = resolvedSite }
+        .onChange(of: settings.homeLat) { _, _ in radar.site = resolvedSite }
+        .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
         .onAppear { driver.start(radar); driver.pause(tab != .map) }
         .onChange(of: tab) { _, tab in
             if tab == .map { layer = .radar }
@@ -139,6 +153,16 @@ struct StormSurface: View {
         .task { await forecasters.poll() }
         .task(id: settings.homeLat) { await lines.load(home: settings.homePoint) }
         #if DEBUG
+        // `-VaneStartTab map` opens on a tab, so a layout can be checked in
+        // the simulator without a remote.
+        .onAppear {
+            switch UserDefaults.standard.string(forKey: "VaneStartTab") {
+            case "forecast": tab = .forecast
+            case "map":      tab = .map
+            case "videos":   tab = .videos
+            default:         break
+            }
+        }
         // A soak test for memory: `-VaneSoak YES` walks every range on the map,
         // then round the tabs, forever — what a remote does when someone is
         // looking around. Measured with Instruments; see `TVSoak`.
@@ -215,3 +239,25 @@ enum TVSoak {
     }
 }
 #endif
+
+/// The tab bar's own row, for the things that sit beside it — the warning,
+/// the radar's age. Centred on the bar, not hung from the top of the screen:
+/// hung from the top, a two-line pill and a one-line one sat at different
+/// heights, and neither lined up with the tabs.
+enum TVTabBarRow {
+    /// From the top of the screen to the tab bar's vertical centre, in points.
+    /// Measured off the system tab bar; tvOS gives no API for it.
+    static let center: CGFloat = 80
+    /// The tab bar's side margins, so a pill's edge lines up with the screen's.
+    static let inset: CGFloat = 80
+}
+
+extension View {
+    func tabBarRow() -> some View {
+        self
+            .frame(height: 2 * TVTabBarRow.center, alignment: .center)
+            .padding(.horizontal, TVTabBarRow.inset)
+            .frame(maxHeight: .infinity, alignment: .top)
+            .ignoresSafeArea()
+    }
+}

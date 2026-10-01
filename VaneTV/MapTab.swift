@@ -206,18 +206,22 @@ struct MapTab: View {
     @ObservedObject var totals: TVRainTotalsModel
     let hasHome: Bool
     let home: GeoPoint?
+    /// "auto" or an ICAO, as `StormSurface` stores it.
+    @Binding var radarSite: String
     @Binding var range: TVMapZoom
     @Binding var layer: TVMapLayer
     @Binding var day: Int
 
     var body: some View {
         if hasHome {
+            // The radar's age is up in the tab bar's row (`RadarClockPill`),
+            // which leaves this corner to the menus.
             HStack(alignment: .bottom, spacing: 16) {
                 viewMenu
                 zoomMenu
-                if layer != .radar { periodMenu }
+                if layer == .radar { siteMenu } else { periodMenu }
                 Spacer(minLength: 40)
-                if layer == .radar { clock } else { outlookCard }
+                if layer != .radar { outlookCard }
             }
             .frame(maxHeight: .infinity, alignment: .bottom)
             .padding(52)
@@ -254,6 +258,39 @@ struct MapTab: View {
             }
         } label: {
             MenuLabel(symbol: "scope", text: range.label)
+        }
+    }
+
+    /// Which radar. THE NEAREST FEW, as on the Mac: past about the fifth-closest
+    /// site the beam is too high over home to see the rain under it. Every site
+    /// is one level down, for watching somebody else's weather.
+    private var siteMenu: some View {
+        let nearby: [(site: RadarSite, miles: Int)] = home.map { h in
+            RadarSites.nearest(latitude: h.latitude, longitude: h.longitude, count: 5).map {
+                ($0, Int(($0.distance(toLatitude: h.latitude, longitude: h.longitude) / 1609.34).rounded()))
+            }
+        } ?? []
+        let chosen = RadarSites.site(radarSite)
+        let label = chosen.map { "\($0.id) · \($0.name)" }
+            ?? nearby.first.map { "Nearest · \($0.site.id)" } ?? "Radar"
+        return Menu {
+            Picker("Radar", selection: $radarSite) {
+                if let nearest = nearby.first {
+                    Text("Nearest to home (\(nearest.site.id))").tag("auto")
+                }
+                ForEach(nearby, id: \.site.id) { entry in
+                    Text("\(entry.site.id) · \(entry.site.name) · \(entry.miles) mi").tag(entry.site.id)
+                }
+            }
+            Menu("All sites") {
+                Picker("All sites", selection: $radarSite) {
+                    ForEach(RadarSites.all) { site in
+                        Text("\(site.id) · \(site.name)").tag(site.id)
+                    }
+                }
+            }
+        } label: {
+            MenuLabel(symbol: "antenna.radiowaves.left.and.right", text: label)
         }
     }
 
@@ -362,35 +399,6 @@ struct MapTab: View {
             return date.formatted(.dateTime.weekday(.wide))
         }
     }
-
-    @ViewBuilder private var clock: some View {
-        if let current = radar.current {
-            HStack(spacing: 10) {
-                Circle().fill(radar.isStale ? Color.orange : Color.green)
-                    .frame(width: 12, height: 12)
-                // HOW OLD, not what o'clock. Nobody watching a storm converts
-                // "2:05 PM" into "twenty minutes ago" — and twenty minutes is
-                // the whole question, because it is how far the thing on screen
-                // has already moved since the picture was taken. The clock time
-                // stays as the smaller half, for anyone checking it against
-                // another source.
-                VStack(alignment: .leading, spacing: 0) {
-                    // Scans still arriving is said, not left as a loop that
-                    // mysteriously will not move.
-                    Text(radar.scansReady < radar.frames.count
-                         ? "Loading scans · \(radar.scansReady) of \(radar.frames.count)"
-                         : RadarAge.describe(current.time))
-                        .font(.system(size: 28, weight: .medium))
-                    Text(When.moment(current.time))
-                        .font(.system(size: 19).monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
-                Text(range.miles).font(.system(size: 22)).foregroundStyle(.secondary)
-            }
-            .padding(.horizontal, 20).padding(.vertical, 10)
-            .background(.thinMaterial, in: Capsule())
-        }
-    }
 }
 
 /// What a closed menu shows: what is chosen, and that pressing opens a list.
@@ -428,6 +436,42 @@ private struct TotalsRamp: View {
             }
             Text("in").font(.system(size: 16)).foregroundStyle(.secondary)
                 .padding(.leading, 6).padding(.bottom, 22)
+        }
+    }
+}
+
+/// How old the radar picture is, in the tab bar's row while the loop is up.
+struct RadarClockPill: View {
+    @ObservedObject var radar: RadarModel
+    let range: TVMapZoom
+
+    var body: some View {
+        if let current = radar.current {
+            HStack(spacing: 10) {
+                Circle().fill(radar.isStale ? Color.orange : Color.green)
+                    .frame(width: 12, height: 12)
+                // HOW OLD, not what o'clock. Nobody watching a storm converts
+                // "2:05 PM" into "twenty minutes ago" — and twenty minutes is
+                // the whole question, because it is how far the thing on screen
+                // has already moved since the picture was taken. The clock time
+                // stays as the smaller half, for anyone checking it against
+                // another source.
+                VStack(alignment: .leading, spacing: 0) {
+                    // Scans still arriving is said, not left as a loop that
+                    // mysteriously will not move.
+                    Text(radar.scansReady < radar.frames.count
+                         ? "Loading scans · \(radar.scansReady) of \(radar.frames.count)"
+                         : RadarAge.describe(current.time))
+                        .font(.system(size: 28, weight: .medium))
+                    Text(When.moment(current.time))
+                        .font(.system(size: 19).monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                Text(range.miles).font(.system(size: 22)).foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 20).padding(.vertical, 10)
+            .background(.thinMaterial, in: Capsule())
+            .fixedSize()
         }
     }
 }

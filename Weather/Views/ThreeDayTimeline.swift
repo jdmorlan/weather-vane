@@ -60,6 +60,9 @@ struct ThreeDayTimeline: View {
     private let localHours: [Int]
     private let scale: CGFloat
     private let textScale: CGFloat
+    /// Read from across a room: the lane names get a column of their own, and
+    /// the hours with rain are numbered under their bars. See `init`.
+    private let isTenFoot: Bool
 
     @State private var hover: Int?
 
@@ -71,10 +74,17 @@ struct ThreeDayTimeline: View {
 
     init(hours: [HourSlice], timezone: TimeZone, precip: PrecipOutlook?,
          risks: [String: StormRisk], scale: CGFloat = 1, textScale: CGFloat? = nil,
-         now: Date = Date()) {
+         isTenFoot: Bool = false, now: Date = Date()) {
         self.hours = hours
         self.scale = scale
         self.textScale = textScale ?? scale
+        // ON THE TV the words are drawn larger than the shapes, and at that size
+        // the lane names sat on the data: "RAIN" over the first bars and the
+        // day's rain total, the gust line straight through "WIND". So there they
+        // get a column the plot doesn't enter. And with no pointer to read an
+        // hour off, the rain bars are numbered — otherwise "which hour is that
+        // bar" means counting ticks from the last axis label.
+        self.isTenFoot = isTenFoot
         self.risks = risks
         var cal = Calendar(identifier: .gregorian)
         cal.timeZone = timezone
@@ -140,6 +150,8 @@ struct ThreeDayTimeline: View {
     private struct Lanes {
         let hasModels: Bool
         let s: CGFloat
+        /// Height of the row of hour numbers under the rain bars; 0 for none.
+        let rainHours: CGFloat
         var day: CGFloat { 18 * s }
         var icon: CGFloat { 24 * s }
         var temp: CGFloat { 120 * s }
@@ -153,14 +165,22 @@ struct ThreeDayTimeline: View {
         var iconTop: CGFloat { day + 2 * s }
         var tempTop: CGFloat { iconTop + icon }
         var rainTop: CGFloat { tempTop + temp + gap }
-        var modelsTop: CGFloat { rainTop + rain + 3 * s }
+        var rainHoursTop: CGFloat { rainTop + rain + (rainHours > 0 ? 2 * s : 0) }
+        var modelsTop: CGFloat { rainHoursTop + rainHours + 3 * s }
         var windTop: CGFloat { modelsTop + (hasModels ? models : 0) + gap }
         var stormTop: CGFloat { windTop + wind + gap }
         var axisTop: CGFloat { stormTop + storm + 4 * s }
         var height: CGFloat { axisTop + axis }
     }
 
-    private var lanes: Lanes { Lanes(hasModels: !agreement.isEmpty, s: scale) }
+    private var lanes: Lanes {
+        Lanes(hasModels: !agreement.isEmpty, s: scale,
+              rainHours: isTenFoot && hasRain ? tx(8) : 0)
+    }
+
+    /// The column the lane names sit in on a ten-foot screen; 0 elsewhere,
+    /// where they share the plot's left edge as they always have.
+    private var gutter: CGFloat { isTenFoot ? tx(40) : 0 }
 
     /// A length at this figure's scale.
     private func pt(_ points: CGFloat) -> CGFloat { points * scale }
@@ -182,13 +202,13 @@ struct ThreeDayTimeline: View {
     }
 
     private func figure(width: CGFloat) -> some View {
-        let colW = width / CGFloat(max(hours.count, 1))
+        let colW = (width - gutter) / CGFloat(max(hours.count, 1))
         return readable(ZStack(alignment: .topLeading) {
             Canvas { ctx, size in draw(ctx, size, colW) }
             ForEach(iconMarks, id: \.self) { i in
                 Image(systemName: WeatherSymbol.name(hours[i].icon))
                     .font(.system(size: tx(14))).symbolRenderingMode(.multicolor)
-                    .position(x: x(Double(i), colW), y: lanes.iconTop + lanes.icon / 2)
+                    .position(x: gutter + x(Double(i), colW), y: lanes.iconTop + lanes.icon / 2)
             }
         }, colW: colW)
     }
@@ -223,11 +243,16 @@ struct ThreeDayTimeline: View {
     // MARK: Drawing
 
     private func draw(_ ctx: GraphicsContext, _ size: CGSize, _ colW: CGFloat) {
+        drawLaneLabels(ctx)
+        // Everything else is drawn in the plot's own coordinates, right of the
+        // gutter when there is one.
+        var ctx = ctx
+        ctx.translateBy(x: gutter, y: 0)
         drawNight(ctx, colW)
         drawDays(ctx, colW, size: size)
-        drawLaneLabels(ctx)
         drawTemperature(ctx, colW)
         drawRain(ctx, colW)
+        drawRainHours(ctx, colW)
         drawModels(ctx, colW)
         drawWind(ctx, colW)
         drawStorms(ctx, colW)
@@ -281,7 +306,9 @@ struct ThreeDayTimeline: View {
     /// Where the storm lane's own label ends. A bar under it centres its label
     /// in what is left, or drops it.
     private func stormLabelEnd(_ ctx: GraphicsContext) -> CGFloat {
-        pt(3) + ctx.resolve(Text("STORMS").font(.system(size: tx(8), weight: .bold)))
+        // In its own column the label is already clear of every bar.
+        guard gutter == 0 else { return 0 }
+        return pt(3) + ctx.resolve(Text("STORMS").font(.system(size: tx(8), weight: .bold)))
             .measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width + pt(6)
     }
 
@@ -356,6 +383,19 @@ struct ThreeDayTimeline: View {
         }
     }
 
+    /// The hour, under each bar that has one, as a bare number — the bars'
+    /// own row, so "the rain starts at 3" is read off rather than counted to.
+    private func drawRainHours(_ ctx: GraphicsContext, _ colW: CGFloat) {
+        guard lanes.rainHours > 0 else { return }
+        for i in hours.indices {
+            guard (hours[i].precipProbability ?? 0) >= 10 || (hours[i].precip ?? 0) > 0 else { continue }
+            let h = localHours[i] % 12 == 0 ? 12 : localHours[i] % 12
+            ctx.draw(Text("\(h)").font(.system(size: tx(7), weight: .medium).monospacedDigit())
+                        .foregroundStyle(.secondary),
+                     at: CGPoint(x: x(Double(i), colW), y: lanes.rainHoursTop), anchor: .top)
+        }
+    }
+
     /// How many of the models have rain in that hour, as a strip that darkens
     /// with agreement — only where the models reach (about eighteen hours).
     private func drawModels(_ ctx: GraphicsContext, _ colW: CGFloat) {
@@ -379,8 +419,16 @@ struct ThreeDayTimeline: View {
         ref.addLine(to: CGPoint(x: CGFloat(hours.count) * colW, y: y(Self.gusty)))
         ctx.stroke(ref, with: .color(.primary.opacity(0.18)),
                    style: StrokeStyle(lineWidth: pt(1), dash: [pt(3), pt(3)]))
-        ctx.draw(Text("\(Int(Self.gusty)) mph").font(.system(size: tx(8))).foregroundStyle(.tertiary),
-                 at: CGPoint(x: CGFloat(hours.count) * colW - pt(2), y: y(Self.gusty) - pt(1)), anchor: .bottomTrailing)
+        let gustyLabel = ctx.resolve(Text("\(Int(Self.gusty)) mph").font(.system(size: tx(8))).foregroundStyle(.tertiary))
+        let gustyAt = CGPoint(x: CGFloat(hours.count) * colW - pt(2), y: y(Self.gusty) - pt(1))
+        if isTenFoot {
+            // The gust line runs right through it otherwise.
+            let size = gustyLabel.measure(in: CGSize(width: CGFloat.infinity, height: .infinity))
+            let back = CGRect(x: gustyAt.x - size.width - pt(3), y: gustyAt.y - size.height,
+                              width: size.width + pt(5), height: size.height)
+            ctx.fill(Path(roundedRect: back, cornerRadius: pt(3)), with: .color(.black.opacity(0.75)))
+        }
+        ctx.draw(gustyLabel, at: gustyAt, anchor: .bottomTrailing)
 
         // Sustained wind as a filled area, gusts as the line above it.
         let avg: [CGPoint?] = hours.indices.map { i in hours[i].windAvg.map { CGPoint(x: x(Double(i), colW), y: y($0)) } }
