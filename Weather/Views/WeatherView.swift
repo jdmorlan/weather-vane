@@ -187,13 +187,12 @@ struct WeatherView: View {
                 // back off the top of the screen.
 
                 switch destination {
-                // The split is by ANCHOR, not by where the data came from. Two
-                // of these cards read the archive and still belong here: "this
-                // day in past years" is context for the number at the top of
-                // the screen, and "what's ahead" extends the ten-day forecast
-                // out to a season. Both answer a question about TODAY, which is
-                // what this destination is for — a period selector would have
-                // nothing to say to either of them.
+                // The split is by ANCHOR, not by where the data came from.
+                // One card here reads the archive and still belongs: "this day
+                // in past years" is context for the number at the top of the
+                // screen — a question about TODAY, which is what this
+                // destination is for. ("What's ahead", the season-transition
+                // line, was removed from Now; Rhythms covers it.)
                 case .now:
                     // Built once and handed down. Two cards read today's shape —
                     // the extremes at the top and the strip below — and reducing
@@ -203,7 +202,8 @@ struct WeatherView: View {
                     // Right now: conditions, the numbers, comfort, daylight. The
                     // pressure band is the one thing it takes from the archive.
                     RightNowCard(report: r, strip: strip,
-                                 pressureBand: archive.climatology?.pressureBand())
+                                 pressureBand: archive.climatology?.pressureBand(),
+                                 rainRate: todaySamples.rain?.currentRate)
                     // What the rain is DOING, on a day that saw any. Renders
                     // nothing otherwise, which is why it can sit this high: on a
                     // wet day it's the most important thing on the screen, and on
@@ -222,7 +222,6 @@ struct WeatherView: View {
                     // working: the question after reading a ten-day is "tell me
                     // more about the part I'll act on", not "how has it scored".
                     if !r.days.isEmpty { TenDayCard(report: r) { forecastGrade(detail: .forecast) } }
-                    seasonsCard(r)      // past ten days: what the season does next
                     // The ONE archive card on this page, and it earns the place:
                     // "is today hot for September 16" is a question about today.
                     // "How the forecast has done" and "Recent mornings" used to
@@ -313,6 +312,13 @@ struct WeatherView: View {
     /// is the right tool for a question you thought of and the wrong one for a
     /// question the app already knows you'll ask.
     @ViewBuilder private func rainSection(_ r: WeatherReport) -> some View {
+        // The same card Now shows, but only while a spell is still open: on
+        // this page "what is the rain doing right now" leads, and a finished
+        // spell is today's history rather than the rain you're asking about.
+        if let rain = todaySamples.rain, rain.isRaining {
+            RainDayCard(rain: rain, climate: archive.climatology)
+        }
+
         // ABOVE THE ARCHIVE GATE, DELIBERATELY. Everything below needs about a
         // season of record before it can say what is usual; this needs only a
         // home point, and "is rain coming" is the question someone opens Rain to
@@ -357,7 +363,7 @@ struct WeatherView: View {
     /// this is ever seen again.
     @ViewBuilder private var windSection: some View {
         if let climate = samples.climate, climate.days > 0 {
-            WindSurface(climate: climate, facing: settings.facing)
+            WindSurface(climate: climate)
         } else if let fold = samples.foldProgress {
             waiting("Reading the wind out of \(fold.total.formatted()) days",
                     detail: "\(fold.done.formatted()) of \(fold.total.formatted())",
@@ -544,20 +550,6 @@ struct WeatherView: View {
     // All time, and the wrappers that used to place them are gone rather than
     // left behind as a second way in.
 
-    /// The one sentence about where this year sits against the usual one, and a
-    /// way through to the rest. What that sentence is ABOUT — when the heat
-    /// breaks here, what "the heat breaking" even means — is Rhythms' job, one
-    /// question to a card.
-    @ViewBuilder private func seasonsCard(_ r: WeatherReport) -> some View {
-        if let climate = archive.climatology, climate.dayCount >= 90 {
-            card(label: "What’s ahead") {
-                SeasonTransitionsCard(climate: climate, today: todayKey(r),
-                                      forecast: seasonForecast(r),
-                                      onOpen: { navigate(.rhythms) })
-            }
-        }
-    }
-
     /// RHYTHMS — when things usually happen here.
     ///
     /// A LIST OF ANSWERED QUESTIONS, which is the third shape this page has had
@@ -604,7 +596,7 @@ struct WeatherView: View {
             preparing("Reading the years behind you", detail: "Going through the archive.")
         } else {
             ContentUnavailableView("Not enough record yet", systemImage: "repeat",
-                                   description: Text("Rhythms are read out of the years behind you — when the nights let go, when the first freeze lands. It needs about a season of archive before it can say any of that."))
+                                   description: Text("Rhythms come from the station’s past years — when nights cool, when the first freeze comes. It needs about a season of archive before it can say any of that."))
                 .emptyStatePanel()
         }
     }

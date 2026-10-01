@@ -40,7 +40,7 @@ struct ComfortScale: View {
         (65, "Sticky",      Color(red: 0.85, green: 0.78, blue: 0.35)),
         (70, "Muggy",       .orange),
         (75, "Oppressive",  Color(red: 0.85, green: 0.35, blue: 0.30)),
-        (80, "Brutal",      Color(red: 0.70, green: 0.20, blue: 0.45)),
+        (80, "Extreme",     Color(red: 0.70, green: 0.20, blue: 0.45)),
     ]
     private static let lower: Double = 40
     private static let upper: Double = 80

@@ -13,10 +13,8 @@
 //  that rotates to your facing. The dial shows ONE reading and its whole job is to
 //  put the wind where it is in the room. A rose is a climatology — the thing you
 //  compare against a neighbour's, a forecast, a memory of the last house — and it
-//  has to be checkable in the frame everyone else states the weather in. So the
-//  facing gets a SENTENCE instead: the body words go where the prose is, and the
-//  picture stays in the issued frame. [[egocentric-weather-and-facing]] draws the
-//  line at exactly this seam.
+//  has to be checkable in the frame everyone else states the weather in.
+//  [[egocentric-weather-and-facing]] draws the line at exactly this seam.
 //
 //  Conventional forms throughout: a stacked polar rose and a bar chart of monthly
 //  means. Both are the shapes a person has already learned to read from any
@@ -261,8 +259,6 @@ struct WindBandLegend: View {
 
 struct WindSurface: View {
     let climate: WindClimate
-    /// True degrees the person is looking toward, when they've said.
-    let facing: Double?
 
     /// The whole record, always. The summary sentences describe the station, not
     /// whatever month the pointer is resting on.
@@ -307,23 +303,9 @@ struct WindSurface: View {
                             .foregroundStyle(index == 0 ? .primary : .secondary)
                             .fixedSize(horizontal: false, vertical: true)
                     }
-                    if let sentence = facingSentence {
-                        Text(sentence)
-                            .font(.callout).foregroundStyle(.secondary)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
                 }
             }
         }
-    }
-
-    /// The record stated in body words, which only exists once you've said which
-    /// way you're looking. Without a facing there is nothing to say and this
-    /// renders nothing — a guessed facing would be worse than none.
-    private var facingSentence: String? {
-        guard let facing, let arc = allYear.dominantArc() else { return nil }
-        let feel = Compass.windFeel(from: arc.centerDegrees, facing: facing)
-        return "Facing \(Compass.cardinal(facing)), that's wind \(feel) most of the year."
     }
 
     /// The rose, and everything the old "By direction" table used to say.
@@ -579,9 +561,9 @@ struct WindSurface: View {
 
     private var constancyNote: String {
         switch rose.constancy {
-        case ..<0.3: return "variable — it cancels itself out"
-        case ..<0.5: return "favours a quarter, but wanders"
-        default:     return "holds its direction"
+        case ..<0.3: return "direction varies a lot"
+        case ..<0.5: return "mostly from one quarter"
+        default:     return "steady direction"
         }
     }
 

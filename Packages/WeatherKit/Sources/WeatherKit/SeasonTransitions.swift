@@ -44,9 +44,9 @@ public enum FrostLevel: Double, CaseIterable, Sendable {
 
     public var detail: String {
         switch self {
-        case .frost: return "32° — tender plants done"
-        case .hardFreeze: return "28° — most annuals gone"
-        case .killingFreeze: return "24° — season over"
+        case .frost: return "32° — damages tender plants"
+        case .hardFreeze: return "28° — kills most annuals"
+        case .killingFreeze: return "24° — kills most plants"
         }
     }
 }

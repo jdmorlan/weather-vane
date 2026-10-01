@@ -106,15 +106,11 @@ struct RainEventTests {
         #expect(RainIntensity.of(rate: 3.0) == .violent)
     }
 
-    @Test("A rate becomes a duration, and a drizzle refuses to")
-    func inchDuration() {
-        #expect(RainEvents.timeForAnInch(atRate: 3.0) == "20 minutes")
-        #expect(RainEvents.timeForAnInch(atRate: 1.0) == "an hour")
-        // 72 minutes is an hour to a person, not "1 hours".
-        #expect(RainEvents.timeForAnInch(atRate: 0.83) == "an hour")
-        #expect(RainEvents.timeForAnInch(atRate: 0.67) == "an hour and a half")
-        #expect(RainEvents.timeForAnInch(atRate: 0.40) == "2 and a half hours")
-        #expect(RainEvents.timeForAnInch(atRate: 0.001) == nil)
+    @Test("A rate is said per hour and per ten minutes, and a drizzle only per hour")
+    func rateText() {
+        #expect(RainEvents.rate(1.86) == "1.86 in/hr — 0.31\" every 10 minutes")
+        #expect(RainEvents.rate(0.24) == "0.24 in/hr — 0.04\" every 10 minutes")
+        #expect(RainEvents.rate(0.02) == "0.02 in/hr")
     }
 
     // MARK: Open vs closed — the same event, two moments

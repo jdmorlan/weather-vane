@@ -9,7 +9,7 @@ final class InterpretationTests: XCTestCase {
         XCTAssertEqual(WeatherInterpreter.dewPointLabel(45), "dry and comfortable")
         XCTAssertEqual(WeatherInterpreter.dewPointLabel(58), "comfortable")
         XCTAssertEqual(WeatherInterpreter.dewPointLabel(67), "humid and muggy")
-        XCTAssertEqual(WeatherInterpreter.dewPointLabel(78), "tropical — heavy, sweaty air")
+        XCTAssertEqual(WeatherInterpreter.dewPointLabel(78), "extremely humid")
     }
 
     func testFeelsLikeCalledOutWhenItDiverges() {
@@ -243,7 +243,7 @@ final class InterpretationTests: XCTestCase {
         // Still an oppressive-peaking week, but reported as one that lets go — not as
         // six identical "Oppressive" days.
         XCTAssertNotNil(report.weekComfort)
-        XCTAssertTrue(report.weekComfort!.contains("lets go"), report.weekComfort!)
+        XCTAssertTrue(report.weekComfort!.contains("fall to around"), report.weekComfort!)
         let today = report.days.first!
         XCTAssertGreaterThan(today.dewPointHigh! - today.dewPointLow!, 8)
         XCTAssertEqual(today.parts.count, 4)
@@ -277,7 +277,7 @@ final class InterpretationTests: XCTestCase {
             h.localDay = 1
             h.localHour = 13 + i
             h.precipProbability = 80
-            h.precip = 0.1      // real accumulation → jacket headline
+            h.precip = 0.1      // real accumulation → rain headline
             h.airTemperature = 60
             hours.append(h)
         }
@@ -286,7 +286,7 @@ final class InterpretationTests: XCTestCase {
         let report = WeatherInterpreter.report(from: forecast,
                                                now: Date(timeIntervalSince1970: TimeInterval(base)))
         XCTAssertTrue(report.rain.willRain)
-        XCTAssertTrue(report.headline.contains("jacket"), report.headline)
+        XCTAssertTrue(report.headline.hasPrefix("Rain"), report.headline)
         XCTAssertFalse(report.hours.isEmpty)
     }
 

@@ -65,7 +65,7 @@ struct PhoneNowView: View {
             LazyVStack(alignment: .leading, spacing: 14) {
                 HazardBanner(watch: hazards.watch)
                 StationAlertsBanner(report: r)
-                RightNowCard(report: r, strip: strip)
+                RightNowCard(report: r, strip: strip, rainRate: today.rain?.currentRate)
                 rainCard
                 TodayCard(report: r, strip: strip)
                 if !r.days.isEmpty { TenDayCard(report: r) }

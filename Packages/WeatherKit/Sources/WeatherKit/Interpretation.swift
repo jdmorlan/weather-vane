@@ -295,7 +295,7 @@ public enum WeatherInterpreter {
         case ..<65:  return "a little sticky"
         case ..<70:  return "humid and muggy"
         case ..<75:  return "oppressively humid"
-        default:     return "tropical — heavy, sweaty air"
+        default:     return "extremely humid"
         }
     }
 
@@ -345,13 +345,11 @@ public enum WeatherInterpreter {
 
     static func rainAmountCharacter(_ accum: Double) -> String {
         switch accum {
-        case ..<0.005: return "barely measurable — a stray drop or two"
-        case ..<0.05:  return "just a sprinkle, enough to dot the windshield"
-        case ..<0.10:  return "a light shower"
-        case ..<0.25:  return "a decent shower"
-        case ..<0.50:  return "moderate, steady rain"
-        case ..<1.0:   return "a soaking rain"
-        default:       return "heavy rain"
+        case ..<0.005: return "a trace"
+        case ..<0.10:  return "light rain"
+        case ..<0.50:  return "moderate rain"
+        case ..<1.0:   return "heavy rain"
+        default:       return "very heavy rain"
         }
     }
 
@@ -511,13 +509,13 @@ public enum WeatherInterpreter {
         if let first = alerts.first { return first }
         if rain.totalAccum >= 0.25 {
             let when = rain.windows.first.map { " around \(clock($0.startHour))" } ?? ""
-            return "Grab a jacket — real rain moving in\(when)."
+            return "Rain\(when) — about \(inches(rain.totalAccum)) expected."
         }
         if pressure.stormWatch {
             return "Pressure is dropping fast — unsettled weather on the way."
         }
         if wind.peakGust >= 25 {
-            return "Windy day — gusts to \(mph(wind.peakGust)). Secure anything loose."
+            return "Windy — gusts to \(mph(wind.peakGust))."
         }
         if rain.willRain {
             return rain.windows.first?.text ?? "A chance of rain today."
@@ -700,9 +698,9 @@ public enum WeatherInterpreter {
 
         if oppressive >= dews.count - 1 {
             if breaks {
-                return "Humid every day — but it lets go: dew points peak near \(temp(peak)) and fall to around \(temp(typicalLow)) later on. Watch the day strip for which half is the heavy one."
+                return "Humid every day — dew points peak near \(temp(peak)) and fall to around \(temp(typicalLow)) later on."
             }
-            return "An oppressive stretch — dew points near \(temp(peak)) day and night; it never really breaks."
+            return "Oppressive all week — dew points near \(temp(peak)) day and night."
         }
         if muggy >= (dews.count + 1) / 2 {
             let tail = breaks ? ", though most days ease off to about \(temp(typicalLow))" : ""

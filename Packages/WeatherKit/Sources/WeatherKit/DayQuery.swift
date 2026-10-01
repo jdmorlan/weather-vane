@@ -282,20 +282,20 @@ public enum Measure: String, CaseIterable, Sendable, Identifiable, Codable {
                     MeasureBand(name: "Mild", lower: 55, upper: 80),
                     MeasureBand(name: "Warm", lower: 80, upper: 90),
                     MeasureBand(name: "Hot", lower: 90, upper: 100),
-                    MeasureBand(name: "Brutal", lower: 100, upper: nil)]
+                    MeasureBand(name: "100° or more", lower: 100, upper: nil)]
         case .low:
             return [MeasureBand(name: "Hard freeze", lower: nil, upper: 28),
                     MeasureBand(name: "Frost", lower: 28, upper: 33),
                     MeasureBand(name: "Chilly", lower: 33, upper: 50),
                     MeasureBand(name: "Cool", lower: 50, upper: 65),
                     MeasureBand(name: "Warm night", lower: 65, upper: 75),
-                    MeasureBand(name: "No relief", lower: 75, upper: nil)]
+                    MeasureBand(name: "Very warm night", lower: 75, upper: nil)]
         case .rain:
             return [MeasureBand(name: "Dry", lower: nil, upper: 0.01),
-                    MeasureBand(name: "Trace", lower: 0.01, upper: 0.1),
-                    MeasureBand(name: "Showers", lower: 0.1, upper: 0.5),
-                    MeasureBand(name: "Soaking", lower: 0.5, upper: 1),
-                    MeasureBand(name: "Downpour", lower: 1, upper: nil)]
+                    MeasureBand(name: "Light", lower: 0.01, upper: 0.1),
+                    MeasureBand(name: "Moderate", lower: 0.1, upper: 0.5),
+                    MeasureBand(name: "Heavy", lower: 0.5, upper: 1),
+                    MeasureBand(name: "Very heavy", lower: 1, upper: nil)]
         default:
             return []
         }
@@ -1583,14 +1583,14 @@ extension DayQuery {
     /// about them, and editing one is the point.
     public static var presets: [DayQuery] {
         [DayQuery(name: "Days it rained", conditions: [Condition(.rain, .atOrAbove(0.01))]),
-         DayQuery(name: "Soaking rain", conditions: [Condition(.rain, .atOrAbove(0.5))]),
-         DayQuery(name: "Triple digits", conditions: [Condition(.high, .atOrAbove(100))]),
-         DayQuery(name: "Nights that never let go", conditions: [Condition(.low, .atOrAbove(75))]),
+         DayQuery(name: "Half an inch of rain or more", conditions: [Condition(.rain, .atOrAbove(0.5))]),
+         DayQuery(name: "Highs of 100° or more", conditions: [Condition(.high, .atOrAbove(100))]),
+         DayQuery(name: "Lows of 75° or more", conditions: [Condition(.low, .atOrAbove(75))]),
          DayQuery(name: "Freezing nights", conditions: [Condition(.low, .below(32))]),
-         DayQuery(name: "Oppressive air", conditions: [Condition(.dewPointPeak, .inBand("Oppressive"))]),
+         DayQuery(name: "Dew point 70° or more", conditions: [Condition(.dewPointPeak, .inBand("Oppressive"))]),
          DayQuery(name: "Hot but dry", conditions: [Condition(.high, .atOrAbove(90)),
                                                     Condition(.dewPoint, .below(60))]),
-         DayQuery(name: "The shop stays cool", conditions: [Condition(.low, .below(68))]),
+         DayQuery(name: "Lows under 68°", conditions: [Condition(.low, .below(68))]),
          DayQuery(name: "Storms", conditions: [Condition(.lightning, .atOrAbove(1)),
                                                Condition(.rain, .atOrAbove(0.1))]),
          DayQuery(name: "Windy", conditions: [Condition(.gust, .atOrAbove(40))])]

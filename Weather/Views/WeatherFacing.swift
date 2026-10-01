@@ -55,43 +55,9 @@ enum Compass {
     }
 
     /// Where `bearing` sits once you turn to face `facing`: 0 = dead ahead, 90 = hard
-    /// right, 180 = behind. This is the whole conversion, and everything below is
-    /// vocabulary on top of it.
+    /// right, 180 = behind.
     static func relative(_ bearing: Double, facing: Double) -> Double {
         normalize(bearing - facing)
-    }
-
-    /// Which side, in body words. The clock-face alternative was tempting and wrong:
-    /// "at your two o'clock" is precise and nobody feels it.
-    static func side(_ relative: Double) -> String {
-        switch normalize(relative) {
-        case ..<22.5:   return "straight ahead"
-        case ..<67.5:   return "ahead and to your right"
-        case ..<112.5:  return "off your right shoulder"
-        case ..<157.5:  return "behind you to the right"
-        case ..<202.5:  return "directly behind you"
-        case ..<247.5:  return "behind you to the left"
-        case ..<292.5:  return "off your left shoulder"
-        case ..<337.5:  return "ahead and to your left"
-        default:        return "straight ahead"
-        }
-    }
-
-    /// The wind is the one case where the body word beats the position word, because
-    /// you feel a wind rather than see it — "in your face" is a fact about your skin.
-    /// `from` is the meteorological bearing (where it BLOWS FROM).
-    static func windFeel(from: Double, facing: Double) -> String {
-        switch normalize(relative(from, facing: facing)) {
-        case ..<30:   return "straight into your face"
-        case ..<75:   return "into your right cheek"
-        case ..<105:  return "across you, right to left"
-        case ..<150:  return "over your right shoulder"
-        case ..<210:  return "at your back"
-        case ..<255:  return "over your left shoulder"
-        case ..<285:  return "across you, left to right"
-        case ..<330:  return "into your left cheek"
-        default:      return "straight into your face"
-        }
     }
 }
 
@@ -261,18 +227,11 @@ struct WindDial: View {
         .offset(y: -(r * 0.66))
     }
 
-    /// The one thing the picture can't say: what it does to you. Everything else the
-    /// dial already shows, so this stays a single line and never repeats the numbers.
+    /// Only the prompt to orient it. Once oriented the arrow already shows where the
+    /// wind comes from relative to the house; a sentence restating it in body words
+    /// ("into your right cheek") was colour, not information.
     @ViewBuilder private var caption: some View {
-        if isOriented {
-            // The phrase is stored lowercase because it reads mid-sentence elsewhere
-            // ("the wind is at your back"); it's only a sentence here.
-            let feel = Compass.windFeel(from: from, facing: effective)
-            Text(feel.prefix(1).uppercased() + feel.dropFirst())
-                .font(.callout.weight(.medium))
-                .multilineTextAlignment(.center)
-                .fixedSize(horizontal: false, vertical: true)
-        } else {
+        if !isOriented {
             Text("Click the ring to say which way you face")
                 .font(.caption).foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)

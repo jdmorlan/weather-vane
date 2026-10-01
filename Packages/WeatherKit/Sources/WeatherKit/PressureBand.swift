@@ -93,9 +93,9 @@ extension WeatherInterpreter {
         let settled: String
         switch value {
         case ..<band.usualLow:
-            settled = "unusually low for here — the range storms arrive in"
+            settled = "unusually low for here — the range most storms arrive in"
         case band.usualHigh...:
-            settled = "unusually high for here — settled, fair-weather air"
+            settled = "unusually high for here — usually fair weather"
         case ..<band.median:
             settled = "a touch below normal for here"
         default:
@@ -104,8 +104,8 @@ extension WeatherInterpreter {
         // A trend beats a level: a falling barometer at an ordinary reading is the more
         // useful warning, and it's the half people were never shown.
         switch trend {
-        case "falling": return "\(settled). Falling — the direction that brings weather in."
-        case "rising":  return "\(settled). Rising — air settling, skies tending to clear."
+        case "falling": return "\(settled). Falling — often ahead of clouds, wind or rain."
+        case "rising":  return "\(settled). Rising — usually clearing."
         default:        return "\(settled). Holding steady."
         }
     }

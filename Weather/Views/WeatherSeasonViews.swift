@@ -1,11 +1,11 @@
 //
 //  WeatherSeasonViews.swift  (macOS)
 //
-//  The two views that read the archive as a CALENDAR rather than as weather:
-//  when the year turns here, and how much winter chill the yard banks.
+//  Views that read the archive as a CALENDAR rather than as weather, such as
+//  how much winter chill this station records.
 //
-//  Both are planning views, and both are built around the same refusal: they
-//  show a WINDOW, never a single date. "First frost: October 24" invites you to
+//  They are planning views, built around one refusal: they show a WINDOW,
+//  never a single date. "First frost: October 24" invites you to
 //  plant against a precision the record doesn't have. "Usually late October —
 //  as early as the 9th, as late as November 12" is the same data told honestly,
 //  and it's the version you can actually make a decision with.
@@ -13,129 +13,6 @@
 
 import SwiftUI
 import WeatherKit
-
-// MARK: - When the year turns
-
-/// ONE SENTENCE about where this year sits against the usual one, and a way
-/// through to the page that explains it. For Now.
-///
-/// It used to have a second style that drew the four-track timeline underneath.
-/// That timeline is gone — see `rhythmsSection` — and what is left is the rule
-/// it was built to serve in the first place: the FINDING belongs where you
-/// already are, the WORKING belongs on its own surface. "Nights usually settle
-/// below 70° by September 4; 12 days on they still haven't" is a fact about this
-/// September and costs one line, which is exactly what a forecast page has room
-/// for.
-struct SeasonTransitionsCard: View {
-    let climate: Climatology
-    let today: String
-    /// The ten-day outlook, in archive terms. Where it reaches, it overrules the
-    /// normals — a card that says "two more days" while the forecast holds every
-    /// night at 74° is telling you about other Septembers, not this one.
-    var forecast: [SeasonForecastDay] = []
-    /// How far ahead the sentence is allowed to look.
-    ///
-    /// 75 days, and the number has survived two attempts to argue with it. It
-    /// was first defended as a room problem — "everything beyond this is
-    /// computed and then deliberately dropped" — which made Rhythms look like
-    /// the room, so it was handed 270. That was the wrong lesson: a countdown
-    /// generates crossings in ONE direction, so a longer axis bought a wider
-    /// chart with every mark still inside its first seven weeks. The long view
-    /// needed different questions, not a longer axis. What is left here is what
-    /// the horizon was always for — the near stretch, which is the only thing a
-    /// single sentence on a forecast page should be about.
-    var horizonDays: Int = 75
-    /// Opens Rhythms.
-    var onOpen: (() -> Void)?
-
-    /// Computed once per day rather than per render. Building the tracks scans
-    /// the whole archive a dozen times over (three thresholds on each of four
-    /// measures, each smoothed across every year), which is fine once and far too
-    /// much for a SwiftUI body that re-evaluates on every scroll.
-    @State private var tracks: [SeasonTrack] = []
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 6) {
-            if tracks.isEmpty {
-                // Blank rather than a message: this is also the state while the
-                // tracks are still being built, and "nothing ahead" would be a lie
-                // for the first frame.
-                Color.clear.frame(height: 1)
-            } else {
-                if let lead = leadLine(tracks) {
-                    Text(lead).font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-                if let onOpen {
-                    HStack {
-                        Spacer(minLength: 0)
-                        Button("Rhythms") { onOpen() }
-                            .buttonStyle(.link).font(.callout)
-                    }
-                }
-            }
-        }
-        .task(id: rebuildKey) {
-            let climate = self.climate
-            let horizon = self.horizonDays
-            let day = self.today
-            let outlook = self.forecast
-            tracks = await Task.detached {
-                climate.seasonalTracks(asOf: day, horizonDays: horizon, forecast: outlook)
-            }.value
-        }
-    }
-
-    /// Rebuild on a new day OR a changed outlook, but not on every refresh that
-    /// returns the same numbers — the build scans the whole archive a dozen times.
-    private var rebuildKey: String {
-        today + forecast.map { "\($0.day):\($0.tempMin ?? -999):\($0.tempMax ?? -999)" }
-            .joined(separator: "|")
-    }
-
-    /// One sentence the picture can't say on its own: what the nearest stretch
-    /// actually is. Everything else the timeline shows better than prose.
-    private func leadLine(_ tracks: [SeasonTrack]) -> String? {
-        guard let track = tracks.first, let first = track.milestones.first else { return nil }
-
-        // A late crossing outranks the countdown, wherever in the chart it sits.
-        // It's the one thing here that isn't the usual shape of the year, the
-        // pills deliberately don't spell it out, and it also breaks the
-        // arithmetic the countdown is built on — "-8 more days" is nonsense.
-        let late = tracks.compactMap { candidate -> (SeasonTrack, SeasonMilestone)? in
-            candidate.milestones.first(where: \.isOverdue).map { (candidate, $0) }
-        }
-        // Most overdue wins, and these are negative, so that's the smallest.
-        .min { ($0.1.normalDaysFromNow ?? 0) < ($1.1.normalDaysFromNow ?? 0) }
-
-        if let (lateTrack, milestone) = late {
-            let usual = WeatherAlmanac.dateLabel(milestone.normalMonthDay ?? milestone.monthDay)
-            let behind = -(milestone.normalDaysFromNow ?? 0)
-            let said = lateTrack.phrase(milestone)
-            let opening = "\(said.subject) usually \(said.verb) by \(usual). \(behind) days on, "
-                + "\(said.plural ? "they still haven't" : "it still hasn't")"
-            guard let lateBy = milestone.lateByDays, milestone.basis == .forecast else {
-                return opening + ", and the forecast doesn't reach it either."
-            }
-            return opening + " — the forecast puts it \(WeatherAlmanac.dateLabel(milestone.monthDay)), \(lateBy) days late."
-        }
-        // A floor can't be counted from: the forecast has ruled the crossing out
-        // through its window without saying what happens after, and "10 more days"
-        // would be the same false precision the normals were guilty of.
-        let least = first.basis == .notBefore ? "at least " : ""
-        let others = tracks.dropFirst().compactMap { $0.milestones.first?.daysFromNow }
-        guard let last = others.max(), last > first.daysFromNow else {
-            let said = track.phrase(first)
-            // Mid-sentence, so the subject loses its capital — but only its
-            // first letter: "the first 32° night", never "the first 32° NIGHT"
-            // and never "the first 32° night" turned into one lowercased blob.
-            let subject = said.subject.prefix(1).lowercased() + said.subject.dropFirst()
-            return "\(least)\(first.daysFromNow) more days before \(subject) \(said.verb)."
-        }
-        return "\(least)\(first.daysFromNow) more days of all of it, then \(last - first.daysFromNow) more before the last of it eases."
-    }
-
-}
 
 // MARK: - The shape of a day
 
@@ -422,8 +299,8 @@ struct WinterChillCard: View {
                     .font(.callout.weight(.medium))
             }
             Text(summary.seasonsCounted == 0
-                 ? "Once a full winter is archived, this will show the chill hours your yard banks and which fruit trees that supports."
-                 : "\(summary.seasonsCounted) complete \(summary.seasonsCounted == 1 ? "winter" : "winters") archived. Three makes a number worth planting against.")
+                 ? "Once a full winter is archived, this will show the chill hours this station records and which fruit trees that supports."
+                 : "\(summary.seasonsCounted) complete \(summary.seasonsCounted == 1 ? "winter" : "winters") archived. Three gives a reliable average.")
                 .font(.callout).foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
         }

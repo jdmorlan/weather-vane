@@ -207,7 +207,7 @@ public enum WeatherAlmanac {
         let afternoonLabel = dateLabel(afternoonDay)
 
         if gap >= 10 {
-            var note = "Nights let go first: they settle below \(Int(nightThreshold))° around \(nightLabel), but afternoons hold above \(Int(afternoonThreshold))° until about \(afternoonLabel) — \(gap) days that still read as summer at 3pm and don’t by morning."
+            var note = "Nights cool first: they drop below \(Int(nightThreshold))° around \(nightLabel), but afternoons hold above \(Int(afternoonThreshold))° until about \(afternoonLabel) — \(gap) days apart."
             if let peakLow = climate.median(\.tempMin, from: "08-01", through: "08-20"),
                let laterLow = climate.median(\.tempMin, from: "09-05", through: "09-25") {
                 note += " Typical overnight low goes \(Int(peakLow.rounded()))° in mid-August to \(Int(laterLow.rounded()))° in late September."
@@ -215,9 +215,9 @@ public enum WeatherAlmanac {
             return note
         }
         if gap <= -10 {
-            return "Afternoons let go first: they ease below \(Int(afternoonThreshold))° around \(afternoonLabel), while nights stay above \(Int(nightThreshold))° until about \(nightLabel) — \(abs(gap)) days that cool off by day but never overnight."
+            return "Afternoons cool first: they drop below \(Int(afternoonThreshold))° around \(afternoonLabel), while nights stay above \(Int(nightThreshold))° until about \(nightLabel) — \(abs(gap)) days apart."
         }
-        return "Afternoons and nights let go together here — below \(Int(afternoonThreshold))° by day around \(afternoonLabel), below \(Int(nightThreshold))° at night around \(nightLabel)."
+        return "Afternoons and nights cool together here — below \(Int(afternoonThreshold))° by day around \(afternoonLabel), below \(Int(nightThreshold))° at night around \(nightLabel)."
     }
 
     // MARK: Formatting

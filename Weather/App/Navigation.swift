@@ -70,7 +70,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     case explore = "Explore"
     case pattern = "Pattern"
     case videos = "Videos"
-    case blog = "Space City Weather"
+    case blog = "SCW"
     case station = "Station"
 
     var id: String { rawValue }

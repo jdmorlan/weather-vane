@@ -98,6 +98,9 @@ struct RightNowCard: View {
     /// The station's own pressure record, from the archive. Nil where there is
     /// no archive, and the instrument draws without its band.
     var pressureBand: PressureBand?
+    /// Inches per hour from the station's newest wet minute, while it's raining.
+    /// The conditions word alone ("Moderate Rain") says nothing about how much.
+    var rainRate: Double?
 
     @EnvironmentObject private var settings: AppSettings
     #if os(iOS)
@@ -152,7 +155,7 @@ struct RightNowCard: View {
                         .lineLimit(1)
                 }
                 VStack(alignment: .leading, spacing: 4) {
-                    Text(r.conditions).font(.title3.weight(.medium))
+                    conditionsLine.font(.title3.weight(.medium))
                     // No "feels like" here: the gauge below states it AND places
                     // it on a scale, which is strictly more than this line said.
                     todayHiLo.font(.headline)
@@ -169,6 +172,20 @@ struct RightNowCard: View {
             comfortGauges
             pressureRow
         }
+    }
+
+    /// Tempest's conditions word, except while the station is measuring rain:
+    /// then the word comes from the measured rate, with the rate beside it.
+    /// Tempest's "Moderate Rain" over a 0.06 in/hr reading put a word and a
+    /// number side by side that disagreed — and the rain card below, which uses
+    /// the same scale as this, said "light".
+    private var conditionsLine: Text {
+        guard let rate = rainRate else { return Text(r.conditions) }
+        let word = RainIntensity.of(rate: rate).label.capitalized
+        let number = Text(String(format: "(%.2f in/hr)", rate))
+            .font(.callout.weight(.medium)).monospacedDigit()
+            .foregroundStyle(Color.accentColor)
+        return Text("\(word) \(number)")
     }
 
     private var hasInstruments: Bool {

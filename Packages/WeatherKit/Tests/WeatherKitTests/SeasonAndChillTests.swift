@@ -311,7 +311,7 @@ final class SeasonAndChillTests: XCTestCase {
                             high: { day in day <= "\(year)-10-14" ? 97 : 84 })
         }
         let note = WeatherAlmanac.summerReliefNote(Climatology(records: records))
-        XCTAssertTrue(note?.contains("Nights let go first") ?? false, note ?? "nil")
+        XCTAssertTrue(note?.contains("Nights cool first") ?? false, note ?? "nil")
         XCTAssertTrue(note?.contains("45 days") ?? false, note ?? "nil")
 
         // The mirror image: afternoons ease long before the nights ever do.
@@ -322,7 +322,7 @@ final class SeasonAndChillTests: XCTestCase {
                             high: { day in day <= "\(year)-08-31" ? 97 : 84 })
         }
         XCTAssertTrue(WeatherAlmanac.summerReliefNote(Climatology(records: flipped))?
-            .contains("Afternoons let go first") ?? false)
+            .contains("Afternoons cool first") ?? false)
     }
 
     func testWarmNightsCountsNightsThatNeverLetGo() {

@@ -183,7 +183,7 @@ public struct SeasonTrack: Equatable, Sendable, Identifiable {
             return ("Nights", cooling ? "settle below \(degrees)" : "stay above \(degrees)", true)
         case .humidity:
             return ("The air", cooling ? "dries below \(degrees) dew point"
-                                       : "thickens past \(degrees) dew point", false)
+                                       : "rises past \(degrees) dew point", false)
         case .freeze:
             return (cooling ? "The first \(degrees) night" : "The last \(degrees) night",
                     cooling ? "arrives" : "passes", false)

@@ -13,10 +13,11 @@
 //  means.
 //
 //  A rate is [[a-number-needs-a-referent]] in its purest form. "0.14 inches" is
-//  not a thing anyone can feel. Two referents fix it and they are different in
-//  kind, so this file carries both: what that rate DOES (spray off pavement,
-//  gutters running) and how long an inch would take at it — a duration, which is
-//  the unit people actually have intuition for.
+//  not a thing anyone can feel. The referent here is the number itself, put two
+//  ways: inches per hour, and what lands in ten minutes. It used to be imagery
+//  too — "spray off the pavement, wipers on fast" — and that read as colour
+//  rather than measurement. Plain numbers, the scale's word beside them, nothing
+//  a reader has to take on trust.
 //
 //  ONE UNIT, TWO MOMENTS. "It's raining" and "it rained today" are not two
 //  features. A rain EVENT is a projection over a day's samples; while the last
@@ -80,12 +81,10 @@ public struct RainSample: Equatable, Sendable {
 /// The thresholds are the standard meteorological ones, converted from the mm/h
 /// they were written in — light below 2.5 mm/h, moderate to 7.6, heavy to 50.
 /// They are a textbook, and this file is otherwise suspicious of textbooks: the
-/// station's own record is the better referent everywhere it exists. It doesn't
-/// exist yet for rate (the sample archive is new and empty), and unlike a
-/// pressure reading a rain rate DOES have a felt meaning that transfers between
-/// places — an inch an hour overwhelms a gutter in Oklahoma and in Oregon alike.
-/// When the sample archive has years in it, the rank belongs alongside this, not
-/// instead of it.
+/// station's own record is the better referent everywhere it exists. Unlike a
+/// pressure reading, though, a rain rate means the same thing between places —
+/// an inch an hour is an inch an hour in Oklahoma and in Oregon alike. A rank
+/// against the sample archive belongs alongside this, not instead of it.
 public enum RainIntensity: Int, CaseIterable, Comparable, Sendable {
     case trace, light, moderate, heavy, violent
 
@@ -109,23 +108,6 @@ public enum RainIntensity: Int, CaseIterable, Comparable, Sendable {
         case .moderate: return "moderate rain"
         case .heavy:    return "heavy rain"
         case .violent:  return "torrential rain"
-        }
-    }
-
-    /// What that rate DOES. Written to be checkable out a window — the test of
-    /// this line is whether someone standing in it agrees.
-    public var meaning: String {
-        switch self {
-        case .trace:
-            return "just enough to darken the pavement. You'd walk to the car without thinking about it."
-        case .light:
-            return "you can stand in it. Individual drops, pavement wet through but puddles slow to form."
-        case .moderate:
-            return "steady enough to soak you crossing a parking lot. Puddles filling, gutters running."
-        case .heavy:
-            return "spray coming up off the pavement, wipers on fast — more water arriving than the ground can take."
-        case .violent:
-            return "you can't see far. This is the rate that fills low spots and ditches in minutes."
         }
     }
 
@@ -381,12 +363,15 @@ public enum RainEvents {
         }
     }
 
-    /// How long an inch would take at this rate — a rate re-expressed as a
-    /// duration, which is the form the number becomes feelable in. Nil below a
-    /// drizzle, where the honest answer is "days" and says nothing.
-    public static func timeForAnInch(atRate rate: Double) -> String? {
-        guard rate >= 0.02 else { return nil }
-        return duration(Int((60 / rate).rounded()))
+    /// A rate as plain numbers: inches per hour, and what that puts down in ten
+    /// minutes — the per-hour figure is the standard one, the ten-minute one is
+    /// the amount you're actually watching fall. The second is left off where it
+    /// would round to nothing.
+    public static func rate(_ inchesPerHour: Double) -> String {
+        let hourly = String(format: "%.2f in/hr", inchesPerHour)
+        let tenMinutes = inchesPerHour / 6
+        guard tenMinutes >= 0.005 else { return hourly }
+        return hourly + " — " + WeatherAlmanac.inches(tenMinutes) + " every 10 minutes"
     }
 }
 
@@ -405,15 +390,11 @@ extension RainEvent {
         return "\(WeatherAlmanac.inches(total)) over \(RainEvents.duration(minutes)), \(when)."
     }
 
-    /// What the hardest part of it was like — the line that answers "heavy
+    /// The hardest part of it, in numbers — the line that answers "heavy
     /// compared to what".
     public var peakSentence: String {
-        let rate = String(format: "%.2f", peak.rate)
-        var text = "Hardest at \(RainEvents.clock(peak.minuteOfDay)): \(rate) in/hr — "
-            + "\(peakIntensity.label), \(peakIntensity.meaning)"
-        if let inch = RainEvents.timeForAnInch(atRate: peak.rate) {
-            text += " At that rate an inch takes \(inch)."
-        }
+        var text = "Hardest at \(RainEvents.clock(peak.minuteOfDay)): \(peakIntensity.label), "
+            + "\(RainEvents.rate(peak.rate))."
         if peakIsDiluted {
             text += " Read from \(bucketMinutes)-minute readings, so the true peak minute was harder than this."
         }
@@ -431,25 +412,28 @@ extension RainDay {
                            : "No rain today."
         }
         if isRaining {
-            let intensity = RainIntensity.of(rate: last.samples.last?.rate ?? last.meanRate)
-            return "Raining now — \(intensity.label). \(WeatherAlmanac.inches(total)) so far today."
+            // The rate itself is the line beneath (`nowSentence`); saying a word
+            // for it here too, off a different reading, let the two disagree.
+            return "Raining now — \(WeatherAlmanac.inches(total)) so far today."
         }
         let spells = events.count == 1 ? "one spell" : "\(events.count) spells"
         return "\(WeatherAlmanac.inches(total)) of rain today, in \(spells) "
              + "totalling \(RainEvents.duration(wetMinutes)) of actual rain."
     }
 
-    /// What it's doing this minute, said in terms of what that rate does. Nil
-    /// when it isn't raining — the meaning of a rate you aren't standing in is
-    /// the event's peak, not the last reading.
+    /// Inches per hour in the newest wet reading. Nil when it isn't raining —
+    /// the rate of a spell you aren't standing in is its peak, not its last
+    /// reading.
+    public var currentRate: Double? {
+        guard isRaining else { return nil }
+        return events.last?.samples.last(where: \.isWet)?.rate
+    }
+
+    /// What it's doing this minute: the scale's word and the numbers behind it.
     public var nowSentence: String? {
-        guard isRaining, let reading = events.last?.samples.last(where: \.isWet) else { return nil }
-        let intensity = RainIntensity.of(rate: reading.rate)
-        var text = String(format: "%.2f in/hr — ", reading.rate) + intensity.meaning
-        if let inch = RainEvents.timeForAnInch(atRate: reading.rate) {
-            text += " At this rate an inch would take \(inch)."
-        }
-        return text
+        guard let rate = currentRate else { return nil }
+        let label = RainIntensity.of(rate: rate).label
+        return label.prefix(1).uppercased() + label.dropFirst() + ", " + RainEvents.rate(rate) + "."
     }
 
     /// Said when the station only watched part of the day. Rain is the measure
