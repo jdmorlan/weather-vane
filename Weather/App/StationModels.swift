@@ -1,15 +1,15 @@
 //
 //  StationModels.swift  (Weather)
 //
-//  The eight models the station surfaces read, and the orchestration that keeps
+//  The models the station surfaces read, and the orchestration that keeps
 //  them fed — lifted out of `WeatherView` when the tabs became destinations.
 //
 //  WHY THEY HAD TO MOVE — as a segmented picker inside one view, switching from
 //  Now to Wind never unmounted anything, so `@StateObject` at that level was
 //  free. A sidebar is not that: Radar is a different view in the detail column,
 //  so navigating to it and back would have torn `WeatherView` down and rebuilt
-//  it, and the `.task` on the rebuilt one would have re-fetched the forecast,
-//  the mornings and today's minutes every time. Owning them above the column
+//  it, and the `.task` on the rebuilt one would have re-fetched the forecast
+//  and today's minutes every time. Owning them above the column
 //  that swaps is what makes the sidebar cost nothing.
 //
 //  It is `ObservableObject` only because `@StateObject` requires one; it
@@ -32,7 +32,6 @@ final class StationModels: ObservableObject {
     /// against the daily archive's one row — and because this one owns a cache
     /// that has to be folded after a fetch, which the daily archive has no notion of.
     let samples = WeatherSamplesModel()
-    let mornings = RecentWindowsModel()
     /// Today's minutes: the archive keeps a day reduced to its extremes, and
     /// everything here is a question about the shape INSIDE the day.
     let todaySamples = DayObservationsModel()
@@ -148,16 +147,6 @@ final class StationModels: ObservableObject {
         // cold archive takes the better part of an hour.
         samples.loadCached()
         catchUpArchives(settings: settings)
-        // `mornings` is NOT started here any more. It is a 29-day raw fetch —
-        // the most expensive single request the app makes — and it fed one card
-        // near the bottom of the Now scroll. It now backs Day shapes under
-        // History and loads when that surface is first opened.
-    }
-
-    /// The Day-shapes fetch, on demand. The model ignores a second call once it
-    /// holds the month, so opening History repeatedly costs nothing.
-    func loadDayShapes(settings: AppSettings) async {
-        await mornings.load(token: settings.tempestToken, stationID: settings.tempestStationID)
     }
 
     /// What the forecast check depends on: the last measured day, the station's

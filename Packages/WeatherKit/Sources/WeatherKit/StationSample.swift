@@ -90,7 +90,7 @@ public struct StationSample: Codable, Equatable, Sendable {
     public var date: Date { Date(timeIntervalSince1970: TimeInterval(timestamp)) }
 
     /// Minutes since local midnight — the x-coordinate for laying samples from
-    /// different days over one axis, as `DayWindows` does.
+    /// different days over one axis.
     public func minuteOfDay(timeZone: TimeZone) -> Int {
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = timeZone

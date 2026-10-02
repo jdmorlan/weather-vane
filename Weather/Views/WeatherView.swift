@@ -78,11 +78,11 @@ final class WeatherModel: ObservableObject {
 /// something longer-lived keeps them alive.
 struct WeatherView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var rainLog: RainLogStore
 
     @ObservedObject private var model: WeatherModel
     @ObservedObject private var archive: WeatherArchiveModel
     @ObservedObject private var samples: WeatherSamplesModel
-    @ObservedObject private var mornings: RecentWindowsModel
     @ObservedObject private var todaySamples: DayObservationsModel
     @ObservedObject private var hazards: WeatherHazardModel
     @ObservedObject private var forecastCheck: ForecastCheckModel
@@ -97,6 +97,13 @@ struct WeatherView: View {
     /// Held here rather than inside Explore so another card can hand one over.
     /// Opens on THIS year: "how often has it rained lately" is the question you
     /// arrive with, and all-time is a deliberate widening from there.
+    /// A position one archive page hands the other — Compare's "open 2023" or
+    /// History's "compare with other Septembers". Held here for the same reason
+    /// as `query`: the page receiving it isn't on screen yet when it's set.
+    @State private var archiveFocus: ArchiveFocus?
+    /// The rain gauge sheet, opened from the "your gauge hasn't measured any"
+    /// note on Now.
+    @State private var loggingGauge = false
     @State private var query: DayQuery = {
         var seeded = DayQuery.presets[0]
         seeded.years = .year(Calendar.current.component(.year, from: Date()))
@@ -126,7 +133,6 @@ struct WeatherView: View {
         model = models.weather
         archive = models.archive
         samples = models.samples
-        mornings = models.mornings
         todaySamples = models.todaySamples
         hazards = models.hazards
         forecastCheck = models.forecastCheck
@@ -203,7 +209,10 @@ struct WeatherView: View {
                     // pressure band is the one thing it takes from the archive.
                     RightNowCard(report: r, strip: strip,
                                  pressureBand: archive.climatology?.pressureBand(),
-                                 rainRate: todaySamples.rain?.currentRate)
+                                 rainRate: todaySamples.rain?.currentRate,
+                                 comparison: todayComparison(r),
+                                 dateLabel: WeatherAlmanac.dateLabel(DayKey.monthDay(of: todayKey(r))),
+                                 onCompare: archive.climatology == nil ? nil : { compareToday(r) })
                     // What the rain is DOING, on a day that saw any. Renders
                     // nothing otherwise, which is why it can sit this high: on a
                     // wet day it's the most important thing on the screen, and on
@@ -221,36 +230,22 @@ struct WeatherView: View {
                     // Detail opens the next three days rather than the grade's
                     // working: the question after reading a ten-day is "tell me
                     // more about the part I'll act on", not "how has it scored".
-                    if !r.days.isEmpty { TenDayCard(report: r) { forecastGrade(detail: .forecast) } }
-                    // The ONE archive card on this page, and it earns the place:
-                    // "is today hot for September 16" is a question about today.
-                    // "How the forecast has done" and "Recent mornings" used to
-                    // sit here too and don't now — one grades the source rather
-                    // than describing the sky, the other is anchored to a
-                    // finished day. Both are under History.
-                    thisDateCard(r)
-                // ONE control, and every card is a lens under it. Records,
-                // Rainfall and Winter chill used to sit loose below the period
-                // section; they take no period because they ARE the whole
-                // archive, which is the All-time grain — so they moved inside
-                // rather than staying as three cards with no door of their own.
+                    if !r.days.isEmpty { TenDayCard(report: r) { forecastGrade } }
+                // One walk, two readings — see `WeatherArchiveBrowser`.
+                case .compare:
+                    archiveSection(.compare, r)
                 case .history:
-                    periodSection(r)
-                    // Both arrived from Now, and both belong to the same
-                    // register: things measured about finished days. The period
-                    // browser above governs a STRETCH; these two answer about
-                    // the record itself, so they sit under it rather than
-                    // inside its grain picker.
-                    forecastCheckSection(r)
-                    dayShapesSection
+                    archiveSection(.history, r)
+                case .forecastCheck:
+                    ForecastCheckPage(model: forecastCheck, timezone: r.timezone ?? .current)
                 case .forecast:
                     // The grade rides along, one line, where it changes how the
                     // numbers under it are read — and its Detail is the working,
-                    // under History.
+                    // on Forecast Check.
                     ForecastPage(report: r, forecastFetched: model.lastUpdated,
                                  storms: storms, precip: precip.outlook,
                                  home: settings.homePoint, openSetup: openSetup) {
-                        forecastGrade(detail: .history)
+                        forecastGrade
                     }
                 case .rhythms:
                     rhythmsSection(r)
@@ -280,23 +275,55 @@ struct WeatherView: View {
             }
         }
         .refreshable { await refresh() }
+        .sheet(isPresented: $loggingGauge) {
+            GaugeEntrySheet(timeZone: model.report?.timezone ?? .current)
+                .environmentObject(settings).environmentObject(rainLog)
+        }
     }
 
-    /// The period surface, held back until the archive can say anything about a
-    /// stretch at all. Below that the History tab is still worth opening — the
-    /// records and rainfall cards explain what they're waiting for.
-    @ViewBuilder private func periodSection(_ r: WeatherReport) -> some View {
+    /// Compare or History, held back until the archive can say anything about
+    /// a stretch at all — and saying so, rather than leaving the page blank.
+    @ViewBuilder private func archiveSection(_ lens: ArchiveLens, _ r: WeatherReport) -> some View {
         if let climate = archive.climatology, climate.dayCount >= 90 {
-            WeatherArchiveBrowser(climate: climate, today: todayKey(r),
-                                  precipToday: r.precipToday) { handOff in
-                // A crossing card says WHEN nights start dropping below 70°.
-                // The obvious next question is which nights those were, and
-                // that's a query — so the card hands one over rather than
-                // growing its own day list.
-                query = handOff
-                navigate(.explore)
+            WeatherArchiveBrowser(lens: lens, climate: climate, today: todayKey(r),
+                                  precipToday: r.precipToday,
+                                  forecast: forecastByDay(r),
+                                  todayHours: DayStrip.today(r, samples: todaySamples.samples).hours,
+                                  sampleStore: samples.store,
+                                  focus: $archiveFocus) { focus in
+                archiveFocus = focus
+                navigate(focus.lens == .compare ? .compare : .history)
+            }
+            // Each page keeps its own walk; without this, switching between them
+            // would hand one page's grain and position to the other.
+            .id(lens)
+        } else {
+            card(label: lens == .compare ? "Compare" : "History") {
+                Text(archiveWaitingNote(lens))
+                    .font(.callout).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
+    }
+
+    /// The ten-day keyed the way the archive is, for Compare to set beside it.
+    private func forecastByDay(_ r: WeatherReport) -> [String: (high: Double?, low: Double?, precip: Double?)] {
+        let zone = r.timezone ?? .current
+        var out: [String: (high: Double?, low: Double?, precip: Double?)] = [:]
+        for day in r.days {
+            let key = DayKey.string(for: Date(timeIntervalSince1970: TimeInterval(day.epoch)), timeZone: zone)
+            out[key] = (day.high, day.low, day.precipTotal)
+        }
+        return out
+    }
+
+    private func archiveWaitingNote(_ lens: ArchiveLens) -> String {
+        guard let climate = archive.climatology else {
+            return "Reading the station's record…"
+        }
+        return "The record holds \(climate.dayCount) \(climate.dayCount == 1 ? "day" : "days"). "
+             + "\(lens == .compare ? "Compare" : "History") opens at 90 — a season — "
+             + "because a shorter stretch has nothing to be set against."
     }
 
     /// RAIN — how much, how often, and how long between.
@@ -329,6 +356,12 @@ struct WeatherView: View {
                               isLoading: precip.isLoading,
                               needsHome: precip.needsHome,
                               onSetUpHome: openSetup)
+        }
+
+        // What your own gauge caught, where the station missed it — and what
+        // those readings say about the station's rain sensor.
+        card(label: "Your rain gauge") {
+            RainGaugeCard(timeZone: r.timezone ?? .current)
         }
 
         if let climate = archive.climatology, climate.dayCount >= 90 {
@@ -457,29 +490,6 @@ struct WeatherView: View {
         DayKey.string(for: Date(), timeZone: r.timezone ?? .current)
     }
 
-    /// The Day-shapes surface, under History where its subject lives.
-    ///
-    /// `.task` here rather than at the root: it is a 29-day raw fetch, and it
-    /// used to run on every cold launch for a card most of the way down the Now
-    /// scroll. Opening History is the first moment anyone has asked for it.
-    @ViewBuilder private var dayShapesSection: some View {
-        if mornings.windows.count >= 3 {
-            card(label: "Day shapes") {
-                DayShapesCard(model: mornings)
-            }
-        } else if mornings.isLoading {
-            card(label: "Day shapes") {
-                ProgressView("Reading the last month of minutes…")
-                    .frame(maxWidth: .infinity, minHeight: 80)
-            }
-        } else if let error = mornings.error {
-            card(label: "Day shapes") {
-                Text("Couldn't read the recent days — \(error)")
-                    .font(.callout).foregroundStyle(.secondary)
-            }
-        }
-    }
-
     /// Today's rain, at the resolution it actually fell in — the same card the
     /// day grain uses, pointed at today, which is the only reason it can be
     /// checked on a clear afternoon.
@@ -496,52 +506,43 @@ struct WeatherView: View {
             // hour the first time.
             Text("Couldn’t read today’s rain — \(error)")
                 .font(.caption).foregroundStyle(.tertiary)
-        }
-    }
-
-    /// Today against this date's record — the headline, the rank, and the years
-    /// behind them, in one card.
-    ///
-    /// IT WAS TWO. A `NormalComparisonStrip` inside the Right-now card said
-    /// "8° warmer than usual, the 3rd warmest", and four cards further down
-    /// `PastYearsStrip` drew the same date across every year. Same question,
-    /// answered twice at different resolutions, with four unrelated cards
-    /// between them — so neither could be read as the elaboration of the other,
-    /// and the strip up top was quietly the more complete of the two.
-    ///
-    /// Together they are one thing: the claim, then the evidence for it.
-    @ViewBuilder private func thisDateCard(_ r: WeatherReport) -> some View {
-        if let climate = archive.climatology, !climate.isEmpty {
-            let key = todayKey(r)
-            let monthDay = DayKey.monthDay(of: key)
-            let today = r.days.first
-            let comparison = WeatherAlmanac.comparison(climate, day: key,
-                                                       high: today?.high, low: today?.low)
-            let history = climate.history(monthDay: monthDay,
-                                          excludingYear: DayKey.year(of: key))
-            if comparison.hasSomethingToSay || !history.isEmpty {
-                card(label: "Today for \(WeatherAlmanac.dateLabel(monthDay))") {
-                    VStack(alignment: .leading, spacing: 16) {
-                        if comparison.hasSomethingToSay {
-                            NormalComparisonStrip(comparison: comparison,
-                                                  todayHigh: today?.high,
-                                                  todayLow: today?.low)
-                        }
-                        if !history.isEmpty {
-                            // Only when BOTH are present: a divider above a lone
-                            // chart is a rule under nothing.
-                            if comparison.hasSomethingToSay { Divider().opacity(0.5) }
-                            PastYearsStrip(history: history,
-                                           normal: climate.normal(monthDay: monthDay),
-                                           dateLabel: WeatherAlmanac.dateLabel(monthDay),
-                                           todayHigh: today?.high,
-                                           todayLow: today?.low,
-                                           defaultEmphasis: climate.seasonalEmphasis(monthDay: monthDay))
-                        }
+        } else if r.conditionsSayPrecipitation && (r.precipToday ?? 0) < 0.01 {
+            // Nor silent on a rainy day the gauge missed. A rain card that
+            // vanishes while it's raining looks exactly like a dry day; this
+            // says which it is, and where to look.
+            card(label: "Rain") {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("Your gauge hasn't measured any rain today.")
+                        .font(.callout.weight(.medium))
+                    Text("WeatherFlow's radar shows \(r.conditions.lowercased()) here. If rain is falling at the station, its rain sensor isn't registering it — light rain often doesn't hit hard enough, and a station saving battery stops listening for it. The Station page shows the battery.")
+                        .font(.caption).foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                    Button {
+                        loggingGauge = true
+                    } label: {
+                        Label("Log what your rain gauge caught", systemImage: "drop.fill")
                     }
+                    .buttonStyle(.link)
+                    .padding(.top, 2)
                 }
             }
         }
+    }
+
+    /// Today's forecast against this date in the record, for the one line Now
+    /// keeps. Nil without an archive.
+    private func todayComparison(_ r: WeatherReport) -> ClimateComparison? {
+        guard let climate = archive.climatology, !climate.isEmpty else { return nil }
+        let today = r.days.first
+        return WeatherAlmanac.comparison(climate, day: todayKey(r),
+                                         high: today?.high, low: today?.low)
+    }
+
+    /// Opens Compare on today: every year's version of this date, with today's
+    /// forecast among them.
+    private func compareToday(_ r: WeatherReport) {
+        archiveFocus = ArchiveFocus(lens: .compare, grain: .day, day: todayKey(r))
+        navigate(.compare)
     }
 
     // Records & streaks, Rainfall and Winter chill used to live here as three
@@ -753,9 +754,9 @@ struct WeatherView: View {
     /// a peer of the forecast.
     ///
     /// So the finding rides in the header and the working — day by day, bias,
-    /// worst miss — is under History, one click away, where the rest of the
-    /// app's self-measurement lives.
-    @ViewBuilder private func forecastGrade(detail: Destination) -> some View {
+    /// worst miss, how far out to trust it — is on Forecast Check, its own
+    /// page, one click away.
+    @ViewBuilder private var forecastGrade: some View {
         if let verdict = forecastCheck.verdict {
             HStack(spacing: 8) {
                 Image(systemName: verdict.isReassuring
@@ -766,7 +767,7 @@ struct WeatherView: View {
                 Text(verdict.headline)
                     .font(.caption.weight(.medium))
                 Spacer(minLength: 0)
-                Button("Detail") { navigate(detail) }
+                Button("Detail") { navigate(.forecastCheck) }
                     .buttonStyle(.link).font(.caption)
             }
         } else if forecastCheck.watchingSince != nil {
@@ -779,17 +780,8 @@ struct WeatherView: View {
                 Text("Keeping score — not enough finished days to grade yet")
                     .font(.caption).foregroundStyle(.tertiary)
                 Spacer(minLength: 0)
-                Button("Detail") { navigate(detail) }
+                Button("Detail") { navigate(.forecastCheck) }
                     .buttonStyle(.link).font(.caption)
-            }
-        }
-    }
-
-    /// The full working, under History.
-    @ViewBuilder private func forecastCheckSection(_ r: WeatherReport) -> some View {
-        if forecastCheck.verdict != nil || forecastCheck.watchingSince != nil {
-            card(label: "How the forecast has done") {
-                ForecastCheckCard(model: forecastCheck, timezone: r.timezone ?? .current)
             }
         }
     }

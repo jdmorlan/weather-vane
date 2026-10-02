@@ -15,7 +15,7 @@
 //  `ScrollView` is two gestures fighting over one trackpad — is preserved and
 //  strengthened here: the map (then Radar) is its own column, not a card in a scroll.
 //
-//  WHAT MOVED UP — the eight models and every long-lived `.task`. A destination
+//  WHAT MOVED UP — the station models and every long-lived `.task`. A destination
 //  that unmounts must not take the forecast, the hazard poll or the archive
 //  catch-up down with it, and in a split view the detail column unmounts every
 //  time you change destination. See `StationModels`.
@@ -26,6 +26,7 @@ import WeatherKit
 
 struct RootView: View {
     @EnvironmentObject private var settings: AppSettings
+    @EnvironmentObject private var rainLog: RainLogStore
     @StateObject private var models = StationModels()
     /// Not one of `StationModels`: nothing in it reads the station. On the root
     /// for the same reason they are — the live check has to keep running
@@ -135,18 +136,15 @@ struct RootView: View {
         // once the catch-up has measured it — and when a refresh files a new
         // claim, which is what makes the card appear on the very first morning
         // instead of after a relaunch.
-        .task(id: models.checkKey) {
+        .task(id: "\(models.checkKey)|\(rainLog.revision)") {
             await models.forecastCheck.load(store: models.archive.store,
                                             timeZone: models.weather.report?.timezone ?? .current,
-                                            key: models.checkKey)
+                                            key: "\(models.checkKey)|\(rainLog.revision)",
+                                            gauge: rainLog.dailyAmounts)
         }
-        // The Day-shapes month, fetched the first time History is opened rather
-        // than at launch. On the root so it survives leaving and returning to
-        // the destination mid-flight.
-        .task(id: destination) {
-            guard destination == .history, settings.hasWeatherStation else { return }
-            await models.loadDayShapes(settings: settings)
-        }
+        // The gauge into the archive's view of the record: every total on
+        // Rain, Compare and History uses the person's number where they gave one.
+        .task(id: rainLog.revision) { models.archive.setGauge(rainLog.dailyAmounts) }
         // THE CONDITIONS KEEP THEMSELVES CURRENT. They used to load once at
         // launch and then only when the button was pressed, so an iPad left on
         // Now went quietly stale while its subtitle kept saying when it was last
@@ -188,7 +186,7 @@ struct RootView: View {
             } else {
                 needsStation
             }
-        case .now, .forecast, .rhythms, .rain, .history, .wind, .explore:
+        case .now, .forecast, .rhythms, .rain, .compare, .history, .forecastCheck, .wind, .explore:
             if settings.hasWeatherStation {
                 WeatherView(models: models, destination: destination,
                             navigate: { destination = $0 },

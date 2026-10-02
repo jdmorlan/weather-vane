@@ -88,9 +88,8 @@ struct ForecastPage<Grade: View>: View {
                     VStack(alignment: .leading, spacing: 12) {
                         Text("Less reliable past three days — read it as a trend, not a plan.")
                             .font(.callout).foregroundStyle(.secondary)
-                        OutlookRibbon(days: Array(report.days.dropFirst(3)), timezone: tz,
-                                      firstIsToday: false)
-                            .opacity(0.8)
+                        DayColumns(days: Array(report.days.dropFirst(3)), timezone: tz,
+                                   firstIsToday: false)
                     }
                 }
             }

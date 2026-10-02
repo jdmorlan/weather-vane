@@ -66,11 +66,20 @@ public struct ForecastNote: Codable, Equatable, Sendable {
     public var precipProbability: Double?
     public var conditions: String?
     public var icon: String?
+    /// The strongest gust in that day's HOURLY forecast, mph. Logged from
+    /// October 2026; earlier rows have none. The daily forecast carries no wind
+    /// at all, so this is the only way a gust forecast can ever be graded.
+    public var gust: Double?
+    /// The muggiest hour's dew point in that day's hourly forecast, °F — Magnus
+    /// from its temperature and humidity, the same function the archive uses
+    /// on the station's own readings. Logged from October 2026.
+    public var dewPoint: Double?
 
     public init(issuedAt: Int, validDay: String,
                 high: Double? = nil, low: Double? = nil,
                 precipProbability: Double? = nil,
-                conditions: String? = nil, icon: String? = nil) {
+                conditions: String? = nil, icon: String? = nil,
+                gust: Double? = nil, dewPoint: Double? = nil) {
         self.issuedAt = issuedAt
         self.validDay = validDay
         self.high = high
@@ -78,6 +87,8 @@ public struct ForecastNote: Codable, Equatable, Sendable {
         self.precipProbability = precipProbability
         self.conditions = conditions
         self.icon = icon
+        self.gust = gust
+        self.dewPoint = dewPoint
     }
 
     public var issued: Date { Date(timeIntervalSince1970: TimeInterval(issuedAt)) }
@@ -88,6 +99,7 @@ public struct ForecastNote: Codable, Equatable, Sendable {
         high == other.high && low == other.low
             && precipProbability == other.precipProbability
             && conditions == other.conditions && icon == other.icon
+            && gust == other.gust && dewPoint == other.dewPoint
     }
 
     /// How many local days ahead this claim was looking.
@@ -117,6 +129,20 @@ extension ForecastNote {
         let keyOf = DayKey.formatter(timeZone: tz)
         let stamp = Int(issuedAt.timeIntervalSince1970)
 
+        // The hours, grouped by the same local day key, for what the daily
+        // forecast doesn't carry: the day's strongest gust and muggiest air.
+        var gusts: [String: Double] = [:]
+        var dews: [String: Double] = [:]
+        for hour in forecast.forecast?.hourly ?? [] {
+            guard let time = hour.time else { continue }
+            let key = keyOf.string(from: Date(timeIntervalSince1970: TimeInterval(time)))
+            if let gust = hour.windGust { gusts[key] = max(gusts[key] ?? gust, gust) }
+            if let t = hour.airTemperature, let rh = hour.relativeHumidity {
+                let dew = WeatherInterpreter.dewPointF(tempF: t, humidity: rh)
+                dews[key] = max(dews[key] ?? dew, dew)
+            }
+        }
+
         return (forecast.forecast?.daily ?? []).compactMap { day in
             guard let start = day.dayStartLocal else { return nil }
             let validDay = keyOf.string(from: Date(timeIntervalSince1970: TimeInterval(start)))
@@ -126,7 +152,9 @@ extension ForecastNote {
                                 low: day.airTempLow,
                                 precipProbability: day.precipProbability,
                                 conditions: day.conditions,
-                                icon: day.icon)
+                                icon: day.icon,
+                                gust: gusts[validDay].map { ($0 * 10).rounded() / 10 },
+                                dewPoint: dews[validDay].map { ($0 * 10).rounded() / 10 })
         }
     }
 }

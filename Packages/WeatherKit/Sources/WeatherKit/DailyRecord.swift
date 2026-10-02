@@ -50,6 +50,9 @@ public struct DailyRecord: Codable, Equatable, Sendable, Identifiable {
     public var windGustMax: Double?
 
     public var precipTotal: Double?
+    /// The rain is from the person's own gauge, laid over the station's in
+    /// memory (`applying(gauge:to:)`). Never set on a record in the archive.
+    public var precipFromGauge: Bool?
     public var strikeCount: Int?
     public var uvMax: Double?
     public var solarMax: Double?

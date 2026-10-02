@@ -104,6 +104,16 @@ struct PhoneRoot: View {
             Tab(Destination.map.rawValue, systemImage: Destination.map.symbol) {
                 MapSurfaceView()
             }
+            // Today's rain and your own gauge — the one thing the phone writes
+            // rather than reads. See `PhoneRainView` for why it isn't the
+            // iPad's archive-built Rain page.
+            Tab(Destination.rain.rawValue, systemImage: Destination.rain.symbol) {
+                NavigationStack {
+                    PhoneRainView(weather: models.weather, today: models.today,
+                                  refresh: { await models.refresh(settings: settings) })
+                        .toolbar { settingsButton }
+                }
+            }
         }
         .sheet(isPresented: $showingSetup) {
             SetupSheet { Task { await models.refresh(settings: settings) } }

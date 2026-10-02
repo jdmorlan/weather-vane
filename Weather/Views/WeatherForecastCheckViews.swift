@@ -1,12 +1,13 @@
 //
 //  WeatherForecastCheckViews.swift  (macOS)
 //
-//  MARKING THE TEN-DAY CARD'S HOMEWORK, directly underneath it.
+//  MARKING THE FORECAST'S HOMEWORK — its own page, Forecast Check.
 //
-//  The card sits below the forecast rather than in History on purpose. It is not
-//  a fact about the archive, it is a fact about the thing you just read — "the
-//  number above this has run four degrees cold all week" is only useful while
-//  the number is still on screen.
+//  The finding rides one line under the ten-day and on the Forecast page,
+//  where "the number above this has run four degrees cold all week" changes how
+//  the number is read. The working lives here: the forecast against the high
+//  that happened, day by day, drawn rather than tabled — and how much worse it
+//  gets the further out it was made.
 //
 //  It renders in three states and the middle one is the reason it exists at all.
 //  Before the log holds anything there is no card. Once it holds something but
@@ -33,6 +34,22 @@ final class ForecastCheckModel: ObservableObject {
     @Published private(set) var awaiting: [(day: String, partial: Bool)] = []
     /// The first day we ever wrote down a forecast for — "keeping score since".
     @Published private(set) var watchingSince: String?
+    /// Every graded day in the window, verdict or not — the chart draws from
+    /// the first one, before there are enough for a verdict to speak.
+    @Published private(set) var checks: [ForecastCheck] = []
+    /// The typical miss at each lead, for "how far out to trust it".
+    @Published private(set) var leadSkill: [LeadSkill] = []
+    /// Every measure the log can grade — the high (also `verdict`/`checks`
+    /// above, which the one-line grade elsewhere reads), the low, and from
+    /// October 2026 the gust and the dew point.
+    @Published private(set) var verdicts: [DailyMeasure: ForecastVerdict] = [:]
+    @Published private(set) var checksByMeasure: [DailyMeasure: [ForecastCheck]] = [:]
+    @Published private(set) var leadSkillByMeasure: [DailyMeasure: [LeadSkill]] = [:]
+    /// The morning's chance of rain against whether it rained.
+    @Published private(set) var rain: RainCalibration?
+    /// The first day a forecast gust (and dew point) was logged for — nil
+    /// until the first capture after the log learned to keep them.
+    @Published private(set) var gustLoggedSince: String?
 
     private let log: FileForecastLog
     private var loadedKey: String?
@@ -51,7 +68,7 @@ final class ForecastCheckModel: ObservableObject {
     /// archive and up to thirty small gzip files, which is nothing on a warm
     /// cache and is still not work to do while a scroll is in flight.
     func load(store: FileDailyArchive, timeZone: TimeZone,
-              key: String, window: Int = 30, now: Date = Date()) async {
+              key: String, gauge: [String: Double] = [:], window: Int = 30, now: Date = Date()) async {
         guard loadedKey != key else { return }
         loadedKey = key
 
@@ -78,12 +95,39 @@ final class ForecastCheckModel: ObservableObject {
                 }
             }
 
+            // The person's own gauge over the station's rain, so a rainy day the
+            // station missed counts as wet when the chance of rain is graded.
+            for record in DailyRecord.applying(gauge: gauge.filter { Set(days).contains($0.key) },
+                                               to: Array(records.values)) {
+                records[record.day] = record
+            }
+
             var graded = 0
+            var checks: [ForecastCheck] = []
             var awaiting: [Pending] = []
-            for day in logged.intersection(days).sorted() {
-                if ForecastAccuracy.check(day: day, log: log, record: records[day],
-                                          timeZone: timeZone) != nil {
+            let gradable = logged.intersection(days).sorted()
+            var byMeasure: [DailyMeasure: [ForecastCheck]] = [:]
+            var verdicts: [DailyMeasure: ForecastVerdict] = [:]
+            var skills: [DailyMeasure: [LeadSkill]] = [:]
+            for measure in DailyMeasure.allCases {
+                byMeasure[measure] = gradable.compactMap {
+                    ForecastAccuracy.check(day: $0, log: log, record: records[$0],
+                                           timeZone: timeZone, measure: measure)
+                }
+                verdicts[measure] = ForecastAccuracy.verdict(days: days, log: log, records: records,
+                                                             timeZone: timeZone, measure: measure)
+                skills[measure] = ForecastAccuracy.leadSkill(days: days, log: log, records: records,
+                                                             timeZone: timeZone, measure: measure)
+            }
+            // The first day the log holds a gust for, at any lead.
+            let gustSince = ((try? log.loggedDays()) ?? []).first { day in
+                ((try? log.claims(for: day)) ?? []).contains { $0.gust != nil }
+            }
+            for day in gradable {
+                if let check = ForecastAccuracy.check(day: day, log: log, record: records[day],
+                                                      timeZone: timeZone) {
                     graded += 1
+                    checks.append(check)
                 } else if (try? log.morningClaim(for: day, timeZone: timeZone)) != nil {
                     awaiting.append(Pending(day: day, partial: records[day] != nil))
                 }
@@ -93,13 +137,28 @@ final class ForecastCheckModel: ObservableObject {
                                                             records: records, timeZone: timeZone),
                           gradedDays: graded,
                           awaiting: awaiting,
-                          watchingSince: logged.min())
+                          watchingSince: logged.min(),
+                          checks: checks,
+                          leadSkill: skills[.high] ?? [],
+                          verdicts: verdicts,
+                          checksByMeasure: byMeasure,
+                          leadSkillByMeasure: skills,
+                          rain: ForecastAccuracy.rainCalibration(days: gradable, log: log,
+                                                                 records: records, timeZone: timeZone),
+                          gustLoggedSince: gustSince)
         }.value
 
         verdict = result.verdict
         gradedDays = result.gradedDays
         awaiting = result.awaiting.map { ($0.day, $0.partial) }
         watchingSince = result.watchingSince
+        checks = result.checks
+        leadSkill = result.leadSkill
+        verdicts = result.verdicts
+        checksByMeasure = result.checksByMeasure
+        leadSkillByMeasure = result.leadSkillByMeasure
+        rain = result.rain
+        gustLoggedSince = result.gustLoggedSince
     }
 
     private struct Pending: Sendable {
@@ -113,12 +172,21 @@ final class ForecastCheckModel: ObservableObject {
         var gradedDays: Int
         var awaiting: [Pending]
         var watchingSince: String?
+        var checks: [ForecastCheck]
+        var leadSkill: [LeadSkill]
+        var verdicts: [DailyMeasure: ForecastVerdict]
+        var checksByMeasure: [DailyMeasure: [ForecastCheck]]
+        var leadSkillByMeasure: [DailyMeasure: [LeadSkill]]
+        var rain: RainCalibration
+        var gustLoggedSince: String?
     }
 }
 
 struct ForecastCheckCard: View {
     let model: ForecastCheckModel
     let timezone: TimeZone
+    /// Off on Forecast Check, whose chart card already leads with it.
+    var showsSentence = true
 
     var body: some View {
         if let verdict = model.verdict {
@@ -132,11 +200,13 @@ struct ForecastCheckCard: View {
 
     @ViewBuilder private func graded(_ v: ForecastVerdict) -> some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(v.sentence)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
+            if showsSentence {
+                Text(v.sentence)
+                    .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
-            if let caveat = v.caveat {
+            if showsSentence, let caveat = v.caveat {
                 Text(caveat)
                     .font(.caption).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -166,10 +236,10 @@ struct ForecastCheckCard: View {
         HStack(spacing: 0) {
             Text(weekday(check.day))
                 .frame(width: 92, alignment: .leading)
-            Text("said \(number(check.forecastHigh))°")
+            Text("said \(number(check.forecast))°")
                 .foregroundStyle(.secondary)
                 .frame(width: 96, alignment: .leading)
-            Text("hit \(number(check.actualHigh))°")
+            Text("hit \(number(check.actual))°")
                 .frame(width: 84, alignment: .leading)
             Text(signed(check.error))
                 .foregroundStyle(color(for: check, tolerance: tolerance))

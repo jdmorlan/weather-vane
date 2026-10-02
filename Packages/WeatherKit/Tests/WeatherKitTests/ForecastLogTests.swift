@@ -136,6 +136,33 @@ struct ForecastLogTests {
         #expect(notes[0].issuedAt == notes[1].issuedAt)
     }
 
+    @Test("Each day's strongest forecast gust and muggiest forecast hour are logged from the hourly")
+    func notesCarryHourlyGustAndDew() throws {
+        var monday = DailyForecast()
+        monday.dayStartLocal = Int(at("2026-09-14", 0).timeIntervalSince1970)
+        monday.airTempHigh = 95
+        func hour(_ h: Double, gust: Double, temp: Double, rh: Double) -> HourlyForecast {
+            var x = HourlyForecast()
+            x.time = Int(at("2026-09-14", h).timeIntervalSince1970)
+            x.windGust = gust; x.airTemperature = temp; x.relativeHumidity = rh
+            return x
+        }
+        let payload = BetterForecast(timezone: "America/Chicago",
+                                     forecast: Forecast(daily: [monday], hourly: [
+                                        hour(9, gust: 12, temp: 85, rh: 70),
+                                        hour(15, gust: 24, temp: 95, rh: 45),
+                                     ]))
+        let note = ForecastNote.notes(from: payload, issuedAt: at("2026-09-14", 7))[0]
+        #expect(note.gust == 24)
+        // Magnus: 85°F at 70% is the muggier hour (~74°), not 95°F at 45% (~71°).
+        #expect(note.dewPoint.map { abs($0 - 74.1) < 0.6 } == true)
+
+        // Lines written before these fields existed still read.
+        let old = #"{"issuedAt":1,"validDay":"2026-09-14","high":95}"#
+        let decoded = try JSONDecoder().decode(ForecastNote.self, from: Data(old.utf8))
+        #expect(decoded.gust == nil && decoded.high == 95)
+    }
+
     @Test("A day with no start epoch is skipped rather than keyed by day-of-month")
     func dayWithoutStartIsSkipped() {
         var vague = DailyForecast()
@@ -304,9 +331,86 @@ struct ForecastAccuracyTests {
         let curve = ForecastAccuracy.curve(day: key, log: log,
                                            record: record(key, high: 99), timeZone: zone)
         #expect(curve.points.map(\.leadDays) == [3, 1, 0])
-        #expect(curve.points.map(\.high) == [92, 95, 97])
-        #expect(curve.actualHigh == 99)
+        #expect(curve.points.map(\.value) == [92, 95, 97])
+        #expect(curve.actual == 99)
         #expect(curve.error(at: curve.points[0]) == -7)
         #expect(curve.error(at: curve.points[2]) == -2)
+    }
+
+    @Test("A claim that stood unchanged counts at every lead it stood through")
+    func standingClaimCoversUnrevisedLeads() throws {
+        let key = day(5)
+        let log = MemoryForecastLog()
+        try log.record([
+            ForecastNote(issuedAt: Int(at(day(0), 7).timeIntervalSince1970), validDay: key, high: 94),
+            ForecastNote(issuedAt: Int(at(day(4), 7).timeIntervalSince1970), validDay: key, high: 97),
+        ])
+        let curve = ForecastAccuracy.curve(day: key, log: log, record: record(key, high: 98), timeZone: zone)
+        #expect(ForecastAccuracy.standingClaim(curve, lead: 3)?.value == 94)
+        #expect(ForecastAccuracy.standingClaim(curve, lead: 1)?.value == 97)
+        #expect(ForecastAccuracy.standingClaim(curve, lead: 6) == nil)
+    }
+
+    @Test("Skill by lead: further out misses by more, and thin leads are left out")
+    func leadSkillGrowsWithLead() throws {
+        let log = MemoryForecastLog()
+        var records: [String: DailyRecord] = [:]
+        var days: [String] = []
+        for offset in 10..<16 {
+            let key = day(offset)
+            days.append(key)
+            records[key] = record(key, high: 90)
+            try log.record([
+                // Four days out: 6° low. The morning of: 1° low.
+                ForecastNote(issuedAt: Int(at(day(offset - 4), 7).timeIntervalSince1970), validDay: key, high: 84),
+                ForecastNote(issuedAt: Int(at(key, 7).timeIntervalSince1970), validDay: key, high: 89),
+            ])
+        }
+        let skill = ForecastAccuracy.leadSkill(days: days, log: log, records: records, timeZone: zone)
+        #expect(skill.map(\.leadDays) == [0, 1, 2, 3, 4])
+        #expect(skill.first?.typicalMiss == 1)
+        #expect(skill.last?.typicalMiss == 6)
+        #expect(skill.last?.bias == -6)
+        #expect(ForecastAccuracy.leadSentence(skill)
+                == "Made the morning of, the forecast high misses by 1° on a typical day; made 3 days out, 6°; made 4 days out, 6°.")
+    }
+
+    @Test("The low is graded against the forecast standing at midnight, not the morning's")
+    func lowIsGradedAgainstTheNightBefore() throws {
+        let key = day(10)
+        let log = MemoryForecastLog()
+        try log.record([
+            ForecastNote(issuedAt: Int(at(day(9), 20).timeIntervalSince1970), validDay: key, high: 90, low: 70),
+            // Issued after the night's low had already happened.
+            ForecastNote(issuedAt: Int(at(key, 7).timeIntervalSince1970), validDay: key, high: 91, low: 66),
+        ])
+        var r = record(key, high: 92)
+        r.tempMin = 65
+        let low = ForecastAccuracy.check(day: key, log: log, record: r, timeZone: zone, measure: .low)
+        #expect(low?.forecast == 70)
+        #expect(low?.error == 5)
+        let high = ForecastAccuracy.check(day: key, log: log, record: r, timeZone: zone)
+        #expect(high?.forecast == 91)
+    }
+
+    @Test("A chance of rain is graded by how often it rained at that chance")
+    func rainCalibrationGroupsByChance() throws {
+        let log = MemoryForecastLog()
+        var records: [String: DailyRecord] = [:]
+        var days: [String] = []
+        let plan: [(Double, Double)] = [(60, 0.4), (70, 0), (80, 1.1), (0, 0), (10, 0), (0, 0.02)]
+        for (i, (chance, rain)) in plan.enumerated() {
+            let key = day(20 + i)
+            days.append(key)
+            var r = record(key, high: 90)
+            r.precipTotal = rain
+            records[key] = r
+            try log.record([ForecastNote(issuedAt: Int(at(key, 7).timeIntervalSince1970), validDay: key,
+                                         high: 90, precipProbability: chance)])
+        }
+        let cal = ForecastAccuracy.rainCalibration(days: days, log: log, records: records, timeZone: zone)
+        #expect(cal.buckets.first { $0.lower == 50 }?.days == 2)
+        #expect(cal.buckets.first { $0.lower == 50 }?.wetDays == 1)
+        #expect(cal.sentence == "When it said 50% or more, it rained on 2 of 3 days. When it said 10% or less, it rained on 1 of 3 days.")
     }
 }

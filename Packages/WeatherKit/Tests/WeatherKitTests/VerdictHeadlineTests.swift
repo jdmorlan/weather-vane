@@ -52,6 +52,14 @@ final class VerdictHeadlineTests: XCTestCase {
         XCTAssertEqual(v.headline, "Off 3.5° either way over 10 days")
     }
 
+    /// Close days don't dilute the direction: 16 cold, 0 warm and 7 close is
+    /// a cold forecast, not "off in both directions" (Sep 9–Oct 1, 2026).
+    func testCloseDaysDoNotHideAOneSidedForecast() {
+        let v = verdict(bias: -2.3, mae: 2.4, cold: 16, warm: 0, close: 7, days: 23)
+        XCTAssertTrue(v.isConsistent)
+        XCTAssertEqual(v.headline, "Runs 2.3° cold over 23 days")
+    }
+
     /// Whole numbers print without a decimal. "Runs 3.0° cold" is the kind of
     /// detail that makes a headline read as machine output.
     func testWholeDegreesDropTheDecimal() {
@@ -60,32 +68,3 @@ final class VerdictHeadlineTests: XCTestCase {
     }
 }
 
-/// The evening window, and the nouns every window can now supply.
-final class ClockWindowNamingTests: XCTestCase {
-
-    func testThePresetsAreInClockOrder() {
-        XCTAssertEqual(ClockWindow.presets.map(\.startHour), [6, 13, 17])
-        XCTAssertEqual(ClockWindow.presets.map(\.name), ["morning", "afternoon", "evening"])
-    }
-
-    func testEveningIsFivePmToNine() {
-        XCTAssertEqual(ClockWindow.evening.startHour, 17)
-        XCTAssertEqual(ClockWindow.evening.endHour, 21)
-        XCTAssertEqual(ClockWindow.evening.hours, 4)
-    }
-
-    /// The noun comes off the start hour, not off a match against the presets,
-    /// so dragging the hours somewhere custom still yields prose.
-    func testACustomWindowStillHasANoun() {
-        XCTAssertEqual(ClockWindow(startHour: 4, endHour: 7).name, "morning")
-        XCTAssertEqual(ClockWindow(startHour: 15, endHour: 19).name, "afternoon")
-        XCTAssertEqual(ClockWindow(startHour: 22, endHour: 24).name, "night")
-    }
-
-    func testTheLabelReadsAsClockTime() {
-        XCTAssertEqual(ClockWindow.morning.label, "6am–10am")
-        XCTAssertEqual(ClockWindow.afternoon.label, "1pm–5pm")
-        XCTAssertEqual(ClockWindow.evening.label, "5pm–9pm")
-        XCTAssertEqual(ClockWindow(startHour: 0, endHour: 6).label, "12am–6am")
-    }
-}

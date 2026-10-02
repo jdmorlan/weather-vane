@@ -27,6 +27,15 @@ final class WeatherArchiveModel: ObservableObject {
     @Published private(set) var dayCount: Int = 0
     @Published private(set) var earliestDay: String?
     @Published private(set) var latestDay: String?
+    /// Day → inches from the person's own gauge, laid over the station's rain
+    /// when the climatology is built. Setting it rebuilds.
+    private var gauge: [String: Double] = [:]
+
+    func setGauge(_ amounts: [String: Double]) {
+        guard amounts != gauge else { return }
+        gauge = amounts
+        reload()
+    }
 
     /// The archive as something queryable — normals, rankings, streaks, records.
     /// Nil until the first load finishes; the forecast renders without it.
@@ -184,10 +193,17 @@ final class WeatherArchiveModel: ObservableObject {
     /// draws. The published values land back on main in one hop, so the UI never
     /// sees a half-updated archive.
     private func reload() {
-        let store = self.store
+        let store = self.store, gauge = self.gauge
         isLoadingClimatology = true
         Task.detached(priority: .utility) {
-            let records = try? store.allRecords()
+            // The gauge goes over the station's rain HERE, in memory, and never
+            // into the archive's files. Only up to the archive's last day: the
+            // record stops at yesterday by design, and a gauge reading for today
+            // must not extend it — it joins once the archive has the day.
+            let records = (try? store.allRecords()).map { raw -> [DailyRecord] in
+                let last = raw.last?.day ?? ""
+                return DailyRecord.applying(gauge: gauge.filter { $0.key <= last }, to: raw)
+            }
             let climate = records.map(Climatology.init(records:))
             await MainActor.run { [weak self] in
                 guard let self else { return }

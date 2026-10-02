@@ -2,134 +2,271 @@
 //  WeatherArchiveBrowser.swift
 //  Almanac
 //
-//  THE HISTORY TAB IS A BROWSER, and it needs a stepper to be one.
+//  TWO PAGES, ONE WALK. The archive is read two ways, and they were one tab with
+//  a toggle between them until it was clear they answer different questions:
 //
-//  The old surface offered `[ Months | Seasons | Recent | Custom ]` and then a
-//  wrap of chips. Every control in it was a JUMP-TO: it could only take you
-//  somewhere you had already decided to go. That's fine for answering a
-//  question and useless for having one — which is why the period cards, and
-//  everything built into them, went unfound. Registering a surface is not the
-//  same as making it reachable.
+//    COMPARE  "how does this stretch stack up?" — one position in the calendar
+//             (Oct 2, October, fall) with every year on record lined up on it.
+//             Opens on NOW, because the stretch you're standing in is the one
+//             you're most likely to be asking about.
+//    HISTORY  "what was this stretch like?" — ONE instance, September 2023 or
+//             fall 2024, read on its own, down to a single day's hours.
 //
-//  What replaces it is Tempest's shape — a GRAIN and a POSITION you walk with
-//  arrows — plus the one axis a live-station app has no reason to want:
+//  Compare leads into History: a year's row is a door into that year's
+//  instance. History leads back: "compare with other Septembers".
 //
-//      [ Day │ Week │ Month │ Season │ Year │ All time ]
+//  Both are walked the same way — Tempest's shape, a GRAIN and a POSITION you
+//  step with arrows:
+//
+//      [ Day │ Week │ Month │ Season │ … ]
 //              ‹     September 2025     ›
-//              [ ● compare all Septembers ]
 //
-//  Moving is cheaper than choosing, so you can wander into a question. And the
-//  second row means a position can be held in ONE year or pooled across every
-//  year on record — "September 2025" and "every September" being the same
-//  window read two ways, which is the comparison the local archive exists to
-//  make.
+//  Moving is cheaper than choosing, so you can wander into a question. The old
+//  surface was a family picker over a wrap of chips, where every control was a
+//  jump-to and could only take you somewhere you had already decided to go.
 //
-//  Every card in the tab is now a lens under this control, including the three
-//  that used to float loose at the bottom: `Records & streaks`, `Rainfall` and
-//  `Winter chill` never took a period, because they are the whole archive —
-//  which is to say they were always the All-time grain, just without a control
-//  that could say so.
+//  WHAT LEFT. "When it turns" (the dated threshold crossings) is Rhythms'
+//  question and lives there. The "Usually" grids were the climate of a stretch,
+//  which is also Rhythms'. Day shapes, a 29-day overlay of recent mornings, was
+//  retired outright.
 //
 
 import SwiftUI
 import WeatherKit
 
+/// Which page the browser is being.
+enum ArchiveLens {
+    case compare, history
+
+    /// The grains each page offers. Compare has no Year — "every year" pooled
+    /// is the whole archive, which is what All time already is — and History
+    /// has no All time, because the whole record isn't one stretch.
+    var grains: [WeatherGrain] {
+        switch self {
+        case .compare: return [.day, .week, .month, .season, .all]
+        case .history: return [.day, .week, .month, .season, .year]
+        }
+    }
+}
+
+/// Today's forecast, for drawing among the years that already happened.
+struct TodayForecast {
+    var year: Int
+    var high: Double?
+    var low: Double?
+}
+
+/// Where one page asks the other to open: which page, a grain, and a day
+/// inside it. The page is part of the address because both pages watch the same
+/// handoff — without it, the page doing the asking would take its own request.
+struct ArchiveFocus: Equatable {
+    var lens: ArchiveLens
+    var grain: WeatherGrain
+    var day: String
+}
+
 struct WeatherArchiveBrowser: View {
+    let lens: ArchiveLens
     let climate: Climatology
     /// Today's key, for the cards that need to know where "now" is.
     let today: String
     let precipToday: Double?
-    /// Hands a built query to the Explore tab.
-    var onExplore: (DayQuery) -> Void = { _ in }
+    /// The ten-day, by day key. Compare draws today's high and low beside every
+    /// past year of the same date — at 8am that's the forecast against the
+    /// record, and by tomorrow the archive has the real day in its place — and
+    /// carries the running month on, dashed, through the days it reaches.
+    var forecast: [String: (high: Double?, low: Double?, precip: Double?)] = [:]
+    /// Today by clock hour — measured up to now, forecast after — for Compare's
+    /// day to draw over every past year's hours.
+    var todayHours: [HourSlice] = []
+    /// Where a finished day's minutes already are. Nil only in previews; the
+    /// network is the fallback for a day the archive hasn't caught up to.
+    var sampleStore: (any SampleArchiveStore)?
+    /// A position handed over by the other page, applied once on arrival.
+    @Binding var focus: ArchiveFocus?
+    /// Opens the other page at a position.
+    var open: (ArchiveFocus) -> Void = { _ in }
 
     @EnvironmentObject private var settings: AppSettings
     /// One day's minutes, re-read whenever the walk lands somewhere new. Owned
-    /// here rather than by the card, because the card renders nothing on a dry
-    /// day and a view that resolves to `EmptyView` loses its `.task`.
-    @StateObject private var dayRain = DayObservationsModel()
+    /// here rather than by the cards, because the rain card renders nothing on a
+    /// dry day and a view that resolves to `EmptyView` loses its `.task`.
+    @StateObject private var dayMinutes = DayObservationsModel()
 
+    /// Set on arrival: Compare opens on a day (today), History on a month.
     @State private var grain: WeatherGrain = .month
     /// The position, as a real date. A day key rather than a `MM-dd` because the
     /// year is half the address whenever you're reading one instance.
     @State private var anchor: String?
-    /// Pooled across every year at this position, or held in the anchor's year.
-    ///
-    /// Defaults to pooled: opening on "every September" is the view that has
-    /// something to say the moment you arrive, where one September needs you to
-    /// have picked the right one first.
-    @State private var pooled = true
+    /// Years taken off Compare. Hidden rather than chosen, so a year that
+    /// arrives with January is shown without anyone opting it in.
+    @State private var hiddenYears: Set<Int> = []
 
     /// The archive stops at yesterday by design, so that — not today — is the
-    /// far end of the walk.
+    /// far end of History's walk.
     private var latestDay: String { climate.latestDay ?? today }
-    private var position: String { anchor ?? latestDay }
+    private var position: String { anchor ?? home }
     private var period: WeatherPeriod? { grain.period(containing: position) }
     private var anchorYear: Int { DayKey.year(of: position) ?? 0 }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            controls
-            content
+        // THE CONTROLS STICK TO THE TOP. With a card per measure the page is
+        // long, and changing the month meant scrolling back up for them. They
+        // floated at the bottom for a while as a pinned footer — but a footer
+        // sits where the content ENDS, so on a short page (one day) it rode up
+        // the window, and it moved every time the page changed length. A pinned
+        // header starts at the top of the page and stays at the top of the
+        // window whatever the page's length: never scrolled for, never moving.
+        LazyVStack(alignment: .leading, spacing: 18, pinnedViews: [.sectionHeaders]) {
+            Section {
+                content
+            } header: {
+                controls
+                    .padding(.horizontal, 14).padding(.vertical, 10)
+                    .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.1)))
+                    .shadow(color: .black.opacity(0.14), radius: 8, y: 2)
+                    .padding(.top, 4)
+            }
         }
-        .onAppear { if anchor == nil { anchor = latestDay } }
-        // Only where a rain card could show. Walking through months mustn't pull
-        // a day of minutes for a view that has nowhere to put them.
-        .task(id: rainSubject) {
-            guard let day = rainSubject else { return }
-            await dayRain.load(day: day, key: day,
-                               token: settings.tempestToken,
-                               stationID: settings.tempestStationID,
-                               timeZone: .current)
+        .onAppear(perform: arrive)
+        .onChange(of: focus) { _, _ in arrive() }
+        // Only at History's day grain. Walking through months mustn't read a
+        // day of minutes for a view that has nowhere to put them.
+        .task(id: minutesSubject) {
+            guard let day = minutesSubject else { return }
+            await dayMinutes.load(day: day, key: day,
+                                  token: settings.tempestToken,
+                                  stationID: settings.tempestStationID,
+                                  timeZone: .current,
+                                  store: sampleStore)
         }
     }
 
-    /// The day whose minutes the rain card wants — nil at every other grain.
-    private var rainSubject: String? {
-        grain == .day && !pooled ? position : nil
+    /// A handed-over position wins; otherwise the walk starts at home.
+    private func arrive() {
+        if let focus, focus.lens == lens {
+            grain = lens.grains.contains(focus.grain) ? focus.grain : .month
+            anchor = focus.day
+            self.focus = nil
+        } else if anchor == nil {
+            grain = lens == .compare ? .day : .month
+            anchor = home
+        }
+    }
+
+    /// Where each page starts. Compare stands on today. History stands in the
+    /// month holding yesterday — unless that month is only a few days old, in
+    /// which case "October 2026, 1 day so far" is a thinner page than the
+    /// September that just finished.
+    private var home: String {
+        switch lens {
+        case .compare:
+            return today
+        case .history:
+            let day = latestDay
+            guard let dayOfMonth = Int(day.suffix(2)), dayOfMonth < 7,
+                  let previous = WeatherGrain.month.step(day, by: -1),
+                  canVisit(previous) else { return day }
+            return previous
+        }
+    }
+
+    /// The day whose minutes the day cards want — nil everywhere else.
+    private var minutesSubject: String? {
+        lens == .history && grain == .day ? position : nil
     }
 
     // MARK: The control
 
+    /// ONE ROW: `[Month ▾]  ‹ September 2026 ›  Today  │  Years (2022)…(2026)    Compare… →`.
+    ///
+    /// It was two controls on two lines — a six-way segmented picker centred
+    /// over a stepper that sat flush left — which looked like two unrelated
+    /// choices and lined up with nothing. They are one choice, "which stretch",
+    /// in two parts: how wide, then where. A dropdown for the width keeps that
+    /// part as small as the decision it is, and lets the row read left to right
+    /// as a phrase. No measure menu: every measure gets its own card.
+    ///
+    /// The year chips share the row too. Pinned across a window that is nearly
+    /// all width, a second line for them was height taken from the cards for
+    /// nothing; they only drop below when the row truly doesn't
+    /// fit — a narrow window, a phone.
     private var controls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Picker("", selection: $grain) {
-                ForEach(WeatherGrain.allCases) { Text($0.label).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(maxWidth: 520)
-            .onChange(of: grain) { _, new in
-                // A grain that can't pool must not stay pooled — otherwise the
-                // toggle vanishes while its state keeps driving the view.
-                if !new.canPool { pooled = false }
-                if new == .year { pooled = false }
-            }
-
-            if grain.isPositional {
-                HStack(spacing: 14) {
-                    stepper
-                    if grain.canPool { poolToggle }
-                    Spacer(minLength: 0)
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 12) {
+                walk
+                if showsChips {
+                    Divider().frame(height: 20)
+                    chips
                 }
+                Spacer(minLength: 0)
+                if grain.isPositional { crossLink }
+            }
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 12) {
+                    walk
+                    Spacer(minLength: 0)
+                    if grain.isPositional { crossLink }
+                }
+                if showsChips { chips }
             }
         }
     }
 
-    /// `‹ September 2025 ›`.
+    private var showsChips: Bool { lens == .compare && grain.isPositional && chipYears.count > 1 }
+
+    private var chips: some View {
+        YearChips(years: chipYears, firstYear: firstYear,
+                  current: DayKey.year(of: today), hidden: $hiddenYears)
+            .fixedSize()
+    }
+
+    /// Width, position, and the way back — the part of the row that moves you.
+    @ViewBuilder private var walk: some View {
+        Picker("Window", selection: $grain) {
+            ForEach(lens.grains) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.menu)
+        .labelsHidden()
+        .fixedSize()
+        .help("How wide a stretch to read")
+
+        if grain.isPositional {
+            stepper
+            if position != home {
+                Button { anchor = home } label: {
+                    Label(lens == .compare ? "Today" : "Latest",
+                          systemImage: "arrow.uturn.backward")
+                }
+                .buttonStyle(.borderless)
+                .fixedSize()
+                .help(lens == .compare ? "Back to the stretch you're standing in"
+                                       : "Back to the most recent stretch")
+            }
+        }
+    }
+
+    /// `‹ September 2026 ›` as ONE control: the arrows and the position share a
+    /// capsule, because they are one thing — where you are, and the way to the
+    /// next place.
     ///
     /// The arrows step by the grain's OWN width, which is what makes them a walk
     /// rather than a nudge: back from September is August, not August 31st.
     private var stepper: some View {
-        HStack(spacing: 6) {
+        HStack(spacing: 0) {
             arrow("chevron.left", by: -1)
             Text(positionLabel)
                 .font(.callout.weight(.medium)).monospacedDigit()
-                .frame(minWidth: 190)
-                .padding(.horizontal, 14).padding(.vertical, 6)
-                .background(Color.accentColor.opacity(0.16), in: Capsule())
-                .overlay(Capsule().stroke(Color.accentColor.opacity(0.35)))
+                .lineLimit(1)
+                .frame(minWidth: 170)
+                .padding(.horizontal, 4)
             arrow("chevron.right", by: 1)
         }
+        .padding(.horizontal, 4)
+        .frame(height: 28)
+        .background(Color.primary.opacity(0.07), in: Capsule())
+        .overlay(Capsule().stroke(Color.primary.opacity(0.12)))
     }
 
     private func arrow(_ symbol: String, by direction: Int) -> some View {
@@ -142,59 +279,70 @@ struct WeatherArchiveBrowser: View {
             if let next, allowed { anchor = next }
         } label: {
             Image(systemName: symbol)
-                .font(.body.weight(.semibold))
+                .font(.callout.weight(.semibold))
                 .frame(width: 26, height: 26)
                 .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
         .disabled(!allowed)
         .opacity(allowed ? 1 : 0.25)
+        .help(direction < 0 ? "Back one \(grain.label.lowercased())" : "Forward one \(grain.label.lowercased())")
     }
 
-    /// A position is worth visiting when the archive holds any of it. Pooled,
-    /// the year doesn't matter — only the place in the calendar does — so the
-    /// walk is free to run the whole cycle.
+    /// A position is worth visiting when the archive holds any of it. On
+    /// Compare the year doesn't matter — only the place in the calendar does —
+    /// so the walk is free to run the whole cycle.
     private func canVisit(_ day: String) -> Bool {
         guard let first = climate.earliestDay else { return false }
-        if pooled { return true }
+        if lens == .compare { return true }
         guard let period = grain.period(containing: day),
               let bounds = period.bounds(inYear: DayKey.year(of: day) ?? 0) else { return false }
         return bounds.end >= first && bounds.start <= latestDay
     }
 
+    /// Compare names a place in the calendar; History names one instance of it.
     private var positionLabel: String {
         guard let period else { return "All time" }
-        switch grain {
-        case .day:
-            return pooled ? "every \(WeatherAlmanac.dateLabel(DayKey.monthDay(of: position)))"
-                          : WeatherAlmanac.dayLabel(position, includeYear: true)
-        case .year:
+        switch (lens, grain) {
+        case (.compare, .day):
+            return WeatherAlmanac.dateLabel(DayKey.monthDay(of: position))
+        case (.compare, _):
+            return period.name
+        case (.history, .day):
+            return WeatherAlmanac.dayLabel(position, includeYear: true)
+        case (.history, .year):
             return String(anchorYear)
-        default:
-            return pooled ? period.name : "\(period.name) \(anchorYear)"
+        case (.history, _):
+            return "\(period.name) \(anchorYear)"
         }
     }
 
-    private var poolToggle: some View {
-        // Named for what it will SHOW, not for the state it's in: "compare all
-        // Septembers" says what the click gets you, where "pooled" is a word
-        // about the implementation.
-        Button {
-            pooled.toggle()
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: pooled ? "square.stack.3d.up.fill" : "square.stack.3d.up")
-                    .font(.caption)
-                Text(pooled ? "comparing every \(cycleName)" : "compare every \(cycleName)")
-                    .font(.callout)
+    private var firstYear: Int { climate.earliestDay.flatMap(DayKey.year(of:)) ?? anchorYear }
+
+    /// Every calendar year the record touches, through this one.
+    private var chipYears: [Int] {
+        let last = DayKey.year(of: today) ?? firstYear
+        return firstYear <= last ? Array(firstYear...last) : []
+    }
+
+    /// The door to the other page, at this same position.
+    @ViewBuilder private var crossLink: some View {
+        switch lens {
+        case .history where grain != .year:
+            Button("Compare with other \(cycleName)s →") {
+                open(ArchiveFocus(lens: .compare, grain: grain, day: position))
             }
-            .padding(.horizontal, 12).padding(.vertical, 6)
-            .background(pooled ? Color.accentColor.opacity(0.16) : Color.primary.opacity(0.06),
-                        in: Capsule())
-            .overlay(Capsule().stroke(pooled ? Color.accentColor.opacity(0.35) : .clear))
+            .buttonStyle(.link)
+        case .compare where grain != .day:
+            // A day's year rows are doors of their own; for the longer grains
+            // the one most likely wanted is the instance you're standing in.
+            Button("\(positionLabel) \(String(anchorYear)) in History →") {
+                open(ArchiveFocus(lens: .history, grain: grain, day: min(position, latestDay)))
+            }
+            .buttonStyle(.link)
+        default:
+            EmptyView()
         }
-        .buttonStyle(.plain)
-        .help("Read this position in every year on record, rather than in \(anchorYear) alone.")
     }
 
     /// What one instance of this position is called — "September", "Sep 1".
@@ -205,72 +353,160 @@ struct WeatherArchiveBrowser: View {
         }
     }
 
+    /// The same position in another year — what a year's row opens.
+    private func openYear(_ year: Int) {
+        let day = "\(year)\(position.dropFirst(4))"
+        open(ArchiveFocus(lens: .history, grain: grain, day: min(day, latestDay)))
+    }
+
     // MARK: The lenses
 
     @ViewBuilder private var content: some View {
-        switch grain {
-        case .all:
+        switch (lens, grain) {
+        case (_, .all):
             allTimeCards
-        case .day:
-            if pooled { pooledDay } else { pinnedDay }
-        default:
+        case (.compare, .day):
+            everyYearDay
+        case (.history, .day):
+            oneDay
+        case (.compare, _):
+            if let period {
+                CompareStretchView(climate: climate, period: period, today: today,
+                                   forecast: forecast, hidden: hiddenYears,
+                                   firstYear: firstYear, onPickYear: openYear)
+            }
+        case (.history, _):
             if let period {
                 PeriodHistoryView(climate: climate, today: today, period: period,
-                                  focusYear: pooled ? nil : anchorYear,
-                                  onExplore: onExplore)
+                                  focusYear: anchorYear) { day in
+                    // Down into one day's hours, still in History.
+                    grain = .day
+                    anchor = day
+                }
             }
         }
     }
 
-    /// The cards that never took a period. They were the All-time grain before
-    /// there was one to put them under.
-    ///
-    /// Winter chill used to be a third one here and isn't: it is not a fact
-    /// about the record, it is a fact about the YEAR — what the yard banks each
-    /// winter — and it sat between Records and Rainfall with nothing in common
-    /// with either. It's on Rhythms. Rainfall followed it out for the same
-    /// reason and is on Rain, which left Records & streaks alone here — the one
-    /// card that really is about the record rather than about the year.
+    /// The one card about the record rather than about a stretch: every year's
+    /// extremes side by side. Winter chill and Rainfall used to sit here too and
+    /// are on Rhythms and Rain, where their subject — the year — lives.
     @ViewBuilder private var allTimeCards: some View {
-        if climate.dayCount >= 30 {
-            card(label: "Records & streaks") {
+        card(label: "Records & streaks") {
+            if climate.dayCount >= 30 {
                 StreaksAndRecords(climate: climate, today: today, precipToday: precipToday)
+            } else {
+                Text("Records start counting at 30 days of record — there are \(climate.dayCount) so far.")
+                    .font(.callout).foregroundStyle(.secondary)
             }
         }
     }
 
-    /// Every year's version of one date. The card at the top has been sitting in
-    /// the Now tab nailed to today — the only thing it needed to answer "show me
-    /// September 1st" was an anchor it didn't pick itself.
-    @ViewBuilder private var pooledDay: some View {
+    /// Every year's version of one date: its hours first, then its range.
+    @ViewBuilder private var everyYearDay: some View {
         let monthDay = DayKey.monthDay(of: position)
+        // One card per measure, hour by hour: temperature (its afternoon peak
+        // and its overnight bottom), then the dew point and the gust.
+        ForEach([DailyMeasure.high, .dewPoint, .gust]) { measure in
+            CompareDayHoursView(monthDay: monthDay, today: today, todayHours: todayHours,
+                                years: chipYears.filter { !hiddenYears.contains($0) },
+                                firstYear: firstYear, store: sampleStore, measure: measure)
+        }
         let history = climate.history(monthDay: monthDay)
-        if history.isEmpty {
+            .filter { !hiddenYears.contains($0.year) }
+        let todayYear = DayKey.year(of: today) ?? 0
+        let showToday = monthDay == DayKey.monthDay(of: today) && !hiddenYears.contains(todayYear)
+        if history.isEmpty && !showToday {
             emptyNote("The archive holds no \(WeatherAlmanac.dateLabel(monthDay)) yet.")
         } else {
+            // Only on today's own date — Oct 2's forecast has nothing to say
+            // about every Oct 3.
+            let ahead = forecast[today]
             DayPooledView(history: history,
                           normal: climate.normal(monthDay: monthDay),
                           monthDay: monthDay,
-                          emphasis: climate.seasonalEmphasis(monthDay: monthDay))
+                          today: showToday ? TodayForecast(year: todayYear,
+                                                           high: ahead?.high ?? nil,
+                                                           low: ahead?.low ?? nil) : nil,
+                          onPickYear: openYear)
         }
     }
 
-    @ViewBuilder private var pinnedDay: some View {
+    @ViewBuilder private var oneDay: some View {
         if let record = climate.record(on: position) {
             DayInstanceCard(record: record,
                             normal: climate.normal(monthDay: DayKey.monthDay(of: position)),
                             history: climate.history(monthDay: DayKey.monthDay(of: position),
                                                      excludingYear: anchorYear))
+            dayTrace
             // The day grain's RAIN row says a total and stops. This is the same
             // card the Now tab uses, pointed at a day in the record: when it
             // rained, how hard, and what that rate meant. The archive is kept in
             // the local zone, so that's the zone its minutes are read back in.
-            if let rain = dayRain.rain, rain.hasSomethingToSay {
+            if dayMinutes.day == position, let rain = dayMinutes.rain, rain.hasSomethingToSay {
                 RainDayCard(rain: rain, climate: climate)
             }
         } else {
             emptyNote("The archive holds nothing for \(WeatherAlmanac.dayLabel(position, includeYear: true)).")
         }
+    }
+
+    /// The day as it happened, hour by hour — the same ribbon Now draws for
+    /// today, every column of it measured. A day's high and low are the
+    /// archive's summary; this is what the summary was taken from.
+    private var dayTrace: some View {
+        card(label: "Hour by hour") {
+            if dayMinutes.day == position, !dayMinutes.samples.isEmpty {
+                let strip = Self.strip(day: position, samples: dayMinutes.samples)
+                VStack(alignment: .leading, spacing: 10) {
+                    HourlyRibbon(hours: strip.hours, timezone: .current)
+                    Text(traceCaption(strip))
+                        .font(.caption2).foregroundStyle(.tertiary)
+                }
+            } else if dayMinutes.isLoading || dayMinutes.day != position && dayMinutes.error == nil {
+                ProgressView("Reading the day's minutes…")
+                    .frame(maxWidth: .infinity, minHeight: 80)
+            } else if let error = dayMinutes.error {
+                Text("Couldn't read this day's minutes — \(error)")
+                    .font(.callout).foregroundStyle(.secondary)
+            } else {
+                Text("The station kept no minutes for this day — only its summary above.")
+                    .font(.callout).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func traceCaption(_ strip: DayStrip) -> String {
+        var parts: [String] = []
+        if let high = strip.high {
+            parts.append("high \(Int(high.value.rounded()))° at \(Self.clock(high.date))")
+        }
+        if let low = strip.low {
+            parts.append("low \(Int(low.value.rounded()))° at \(Self.clock(low.date))")
+        }
+        if strip.observedHours < 24 {
+            parts.append("\(strip.observedHours) of 24 hours measured")
+        }
+        return parts.joined(separator: " · ")
+    }
+
+    private static func clock(_ date: Date) -> String {
+        date.formatted(.dateTime.hour().minute())
+    }
+
+    /// A finished day's strip: every column measured, no forecast to splice.
+    ///
+    /// Night shading comes off the station's own light sensor rather than an
+    /// almanac — the first and last hours the sun registered — so it is right for
+    /// the day being read, not for whatever day the app happens to be open on.
+    static func strip(day: String, samples: [StationSample]) -> DayStrip {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .current
+        let lit = samples.filter { ($0.solarRadiation ?? 0) > 10 }
+            .map { calendar.component(.hour, from: $0.date) }
+        return DayStrip.build(day: day, samples: samples, forecast: [],
+                              timeZone: .current,
+                              sunriseHour: lit.min() ?? 7,
+                              sunsetHour: (lit.max() ?? 18) + 1)
     }
 
     private func emptyNote(_ text: String) -> some View {
@@ -280,38 +516,32 @@ struct WeatherArchiveBrowser: View {
     }
 
     private func card<Content: View>(label: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(label.uppercased())
-                .font(.caption.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary)
-            content()
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.07)))
+        StationCard(label: label, content: content)
     }
 }
 
 // MARK: - One date, every year
 
-/// What a September 1 IS, and what each one actually did.
+/// Every year's version of one date, side by side.
 ///
 /// This started as a single temperature strip, which made the day the thinnest
 /// grain in the tab — one card, one measure, on a page where every other grain
 /// gets five. The archive holds thirteen measures for each of these days; the
 /// strip was showing one of them.
 ///
-/// Three cards, in the order the questions arrive: what one of these is usually
-/// like · where each year landed on the axis · the whole table, because once you
-/// have four Septembers in front of you the thing you want is to read across
-/// them.
+/// Two cards: where each year landed, low to high on one axis · the whole
+/// table, because once you have four Septembers in front of you the thing you
+/// want is to read across them. A "what one of these is usually like" grid led
+/// here once, and left for Rhythms with the rest of the climate.
 struct DayPooledView: View {
     let history: [HistoricalDay]
-    /// Pooled ±7 days across every year — see `usualCaption` for why that has to
-    /// be said out loud on a card about ONE date.
+    /// Pooled ±7 days across every year, for the dimmed "Usual" bar.
     let normal: DailyNormal
     let monthDay: String
-    let emphasis: Climatology.TemperatureEmphasis
+    /// This year's instance while it's still today — a forecast, not a record.
+    var today: TodayForecast?
+    /// Opens one year's instance of this date in History.
+    var onPickYear: (Int) -> Void = { _ in }
 
     private var label: String { WeatherAlmanac.dateLabel(monthDay) }
     /// Years that actually hold this date — NOT `normal.years`, which counts the
@@ -321,79 +551,11 @@ struct DayPooledView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            usualCard
             card(label: "Every \(label) on record") {
-                DayRangeRows(history: history, normal: normal, dateLabel: label)
+                DayRangeRows(history: history, normal: normal, dateLabel: label, today: today)
             }
             tableCard
         }
-    }
-
-    // MARK: What one of these is like
-
-    private var usualCard: some View {
-        card(label: "What a \(label) is like") {
-            VStack(alignment: .leading, spacing: 12) {
-                Grid(alignment: .leading, horizontalSpacing: 22, verticalSpacing: 12) {
-                    GridRow {
-                        stat("HIGH", degrees(normal.high))
-                        stat("LOW", degrees(normal.low))
-                        stat("PEAK DEW", degrees(normal.dewPointPeak))
-                        stat("HUMIDITY", normal.humidity.map { "\(Int($0.rounded()))%" } ?? "—")
-                        stat("GUST", normal.gust.map { "\(Int($0.rounded())) mph" } ?? "—")
-                        stat("UV", normal.uv.map { String(format: "%.1f", $0) } ?? "—")
-                    }
-                    GridRow {
-                        // Rain is a SHARE, never a mean. "0.10 inches" on one
-                        // date is a downpour divided by the years it stayed dry,
-                        // and this archive has been walked into that three times.
-                        stat("RAIN", wetYears, wide: true)
-                        stat("LIGHTNING", stormYears, wide: true)
-                        stat("PRESSURE", normal.pressure.map { String(format: "%.2f inHg", $0) } ?? "—",
-                             wide: true)
-                    }
-                }
-                Text(usualCaption)
-                    .font(.caption).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-                Text("Rain and lightning count THIS date only — \(yearsHeld) \(yearsHeld == 1 ? "year" : "years") — because \"does it rain on \(label)\" is a question about \(label)s, not about the fortnight around one.")
-                    .font(.caption).foregroundStyle(.tertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-        }
-    }
-
-    /// The normal is pooled from the fortnight AROUND the date, not from the
-    /// handful of that exact date. That's the right way to compute it — three
-    /// September 1sts is noise — but on a card whose whole subject is one date
-    /// it has to be said, or the reader takes these for averages of the three
-    /// numbers in the table below and finds they don't add up.
-    private var usualCaption: String {
-        "Pooled from the \(normal.sampleDays) days within a week either side of \(label), "
-        + "across \(normal.years) \(normal.years == 1 ? "year" : "years") — "
-        + "a handful of \(label)s alone is too few to average."
-    }
-
-    private var wetYears: String { tally { ($0.precipTotal ?? 0) >= 0.01 } }
-    private var stormYears: String { tally { ($0.strikeCount ?? 0) >= 1 } }
-
-    /// "1 of 3" — counted over the years that hold THIS date.
-    ///
-    /// The first cut multiplied `normal.rainFrequency` by the number of years,
-    /// which is a denominator swap: that share is over the ±7-day window's 46
-    /// days, so scaling it by 3 years produced a per-year count out of a
-    /// per-day rate. On Sep 1 it happened to land on the right answer, which is
-    /// the worst way for that class of bug to behave. Counting the days the
-    /// question is actually about needs no conversion and can't drift from the
-    /// table below it.
-    private func tally(_ matches: (DailyRecord) -> Bool) -> String {
-        // A partial day can still PROVE rain — the reading is a floor — but it
-        // can't prove the absence of it, so a dry partial day is excluded from
-        // the denominator rather than counted as a dry year.
-        let answered = history.filter { matches($0.record) || $0.record.isReliable }
-        guard !answered.isEmpty else { return "—" }
-        let count = answered.filter { matches($0.record) }.count
-        return count == 0 ? "never, in \(answered.count)" : "\(count) of \(answered.count)"
     }
 
     // MARK: The table
@@ -412,8 +574,10 @@ struct DayPooledView: View {
                     }
                     ForEach(history.sorted { $0.year > $1.year }) { entry in
                         GridRow {
-                            Text(String(entry.year))
+                            Button(String(entry.year)) { onPickYear(entry.year) }
+                                .buttonStyle(.link)
                                 .font(.callout.weight(.medium)).frame(width: 44, alignment: .leading)
+                                .help("Open \(label), \(String(entry.year)) in History")
                             cell(degrees(entry.record.tempMax))
                             cell(degrees(entry.record.tempMin))
                             cell(degrees(entry.record.dewPointMax))
@@ -431,6 +595,8 @@ struct DayPooledView: View {
                         }
                     }
                 }
+                Text("Click a year to open that day in History.")
+                    .font(.caption2).foregroundStyle(.tertiary)
                 if let extremes = extremesLine {
                     Text(extremes).font(.caption).foregroundStyle(.tertiary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -462,28 +628,12 @@ struct DayPooledView: View {
         Text(text).font(.callout.monospacedDigit()).frame(width: 66, alignment: .leading)
     }
 
-    private func stat(_ label: String, _ value: String, wide: Bool = false) -> some View {
-        VStack(alignment: .leading, spacing: 3) {
-            Text(label).font(.caption2.weight(.semibold)).tracking(0.6).foregroundStyle(.tertiary)
-            Text(value).font(.system(size: wide ? 15 : 19, weight: .light, design: .rounded))
-        }
-        .frame(minWidth: wide ? 132 : 74, alignment: .leading)
-    }
-
     private func degrees(_ value: Double?) -> String {
         value.map { "\(Int($0.rounded()))°" } ?? "—"
     }
 
     private func card<Content: View>(label: String, @ViewBuilder _ content: () -> Content) -> some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text(label.uppercased())
-                .font(.caption.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary)
-            content()
-        }
-        .padding(20)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
-        .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.07)))
+        StationCard(label: label, content: content)
     }
 }
 
@@ -514,9 +664,10 @@ struct DayRangeRows: View {
     let history: [HistoricalDay]
     let normal: DailyNormal
     let dateLabel: String
+    var today: TodayForecast?
 
     private let gutter: CGFloat = 52
-    private let readout: CGFloat = 84
+    private let readout: CGFloat = 100
 
     private var years: [HistoricalDay] { history.sorted { $0.year > $1.year } }
     private var highs: [Double] { history.compactMap(\.record.tempMax) }
@@ -530,6 +681,10 @@ struct DayRangeRows: View {
                     .fixedSize(horizontal: false, vertical: true)
             }
             VStack(alignment: .leading, spacing: 7) {
+                if let today, today.high != nil || today.low != nil {
+                    row("Today", low: today.low, high: today.high,
+                        dimmed: false, note: "forecast")
+                }
                 ForEach(years) { entry in
                     row(String(entry.year),
                         low: entry.record.tempMin, high: entry.record.tempMax,
@@ -560,8 +715,12 @@ struct DayRangeRows: View {
                     .font(.callout.monospacedDigit())
                     .foregroundStyle(dimmed ? .secondary : .primary)
                 if let note {
-                    Text(note).font(.caption2).foregroundStyle(.orange.opacity(0.9))
-                        .help("The station missed part of this day: the high is a floor, the low a ceiling, so the real bar is at least this wide.")
+                    let isForecast = note == "forecast"
+                    Text(note).font(.caption2)
+                        .foregroundStyle(isForecast ? Color.accentColor : Color.orange.opacity(0.9))
+                        .help(isForecast
+                              ? "Today's forecast high and low. Tomorrow the archive holds what actually happened, and this row takes its place among the years."
+                              : "The station missed part of this day: the high is a floor, the low a ceiling, so the real bar is at least this wide.")
                 }
             }
             .frame(width: readout, alignment: .trailing)
@@ -607,6 +766,7 @@ struct DayRangeRows: View {
     /// different facts, and the day that was hottest need not be the day that
     /// was warmest overnight — which on this archive's September 1 it is not.
     private var spreadSentence: String? {
+        if let ranked = todaySentence { return ranked }
         guard highs.count >= 2, let hMin = highs.min(), let hMax = highs.max() else {
             guard let only = years.first, let high = only.record.tempMax else { return nil }
             return "One \(dateLabel) on record: \(Int(high.rounded()))°."
@@ -620,12 +780,27 @@ struct DayRangeRows: View {
         return text
     }
 
+    /// "Today's forecast 91° would be the warmest Oct 2 of the 5 on record."
+    ///
+    /// Stated as a rank out of the years held, never as a bare superlative, and
+    /// as WOULD BE — it is a forecast until tomorrow, when the archive has the
+    /// day and this row becomes an ordinary one.
+    private var todaySentence: String? {
+        guard let high = today?.high, !highs.isEmpty else { return nil }
+        let warmer = highs.filter { $0 > high }.count
+        let total = highs.count + 1
+        let place = warmer == 0 ? "the warmest"
+                  : warmer == total - 1 ? "the coolest"
+                  : "the \(DayInstanceCard.ordinal(warmer + 1)) warmest"
+        return "Today's forecast \(Int(high.rounded()))° would be \(place) \(dateLabel) of the \(total) on record."
+    }
+
     // MARK: Scale
 
     /// One scale for every row including Usual — that shared scale is the whole
     /// reason the bars can be compared by eye.
     private var scale: ClosedRange<Double> {
-        let values = lows + highs + [normal.low, normal.high].compactMap { $0 }
+        let values = lows + highs + [normal.low, normal.high, today?.low, today?.high].compactMap { $0 }
         guard let low = values.min(), let high = values.max() else { return 0...100 }
         let padding = max(3, (high - low) * 0.12)
         return (low - padding)...(high + padding)
@@ -717,9 +892,11 @@ struct DayInstanceCard: View {
         let total = others.count + 1
         let ordinal = warmer == 0 ? "the warmest"
                     : warmer == total - 1 ? "the coolest"
-                    : "the \(warmer + 1)\(Self.suffix(warmer + 1)) warmest"
+                    : "the \(Self.ordinal(warmer + 1)) warmest"
         return "\(title) reached \(Int(high.rounded()))° — \(ordinal) of the \(total) on record."
     }
+
+    static func ordinal(_ n: Int) -> String { "\(n)\(suffix(n))" }
 
     private static func suffix(_ n: Int) -> String {
         switch n % 100 {

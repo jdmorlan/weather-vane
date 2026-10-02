@@ -149,6 +149,10 @@ public struct Climatology: Sendable {
 
     public func record(on day: String) -> DailyRecord? { byDay[day] }
 
+    /// The reliable days on one `MM-dd`, every year — for pooled normals built
+    /// outside this file.
+    func reliableRecords(monthDay: String) -> [DailyRecord] { byMonthDay[monthDay] ?? [] }
+
     // MARK: Which end of the day matters
 
     /// Whether a date is better judged by its high or its low.

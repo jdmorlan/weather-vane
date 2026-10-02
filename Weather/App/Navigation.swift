@@ -28,8 +28,14 @@
 //             the group was the right idea: it had been stranded in History's
 //             All-time grain, and the questions it answers were otherwise only
 //             reachable by building a query in Explore.
-//    RECORD   what actually happened. History is a stretch you name, Explore is
-//             a question asked over everything.
+//    RECORD   what actually happened. Compare lines a stretch up against the
+//             same stretch in every other year — today against every Oct 2,
+//             this October so far against the others. History is one stretch
+//             read on its own: what September 2023 was like, down to a day's
+//             hours. Compare leads into History; History links back. Forecast
+//             Check is the forecast's own record: what each morning said
+//             against the high that happened, and how far out it is worth
+//             reading. Explore is a question asked over everything.
 //    BEYOND   not this acre at all — the wave upstairs that steers it, from a
 //             model run rather than the station.
 //    FORECASTERS  other people, reading the same sky: two YouTube channels'
@@ -65,7 +71,9 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     case map = "Map"
     case rhythms = "Rhythms"
     case rain = "Rain"
+    case compare = "Compare"
     case history = "History"
+    case forecastCheck = "Forecast Check"
     case wind = "Wind"
     case explore = "Explore"
     case pattern = "Pattern"
@@ -82,7 +90,9 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .map:     return "map"
         case .rhythms: return "repeat"
         case .rain:    return "drop"
+        case .compare: return "square.stack.3d.up"
         case .history: return "calendar"
+        case .forecastCheck: return "checkmark.circle"
         case .wind:    return "wind"
         case .explore: return "magnifyingglass"
         case .pattern: return "globe.americas"
@@ -102,7 +112,9 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .map:     return "Weather Map"
         case .rhythms: return "Rhythms"
         case .rain:    return "Rain"
+        case .compare: return "Compare"
         case .history: return "History"
+        case .forecastCheck: return "How the Forecast Has Done"
         case .wind:    return "Wind"
         case .explore: return "Explore"
         case .pattern: return "Upper Air"
@@ -122,7 +134,9 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .map:     return "What's around you, and what's on the way"
         case .rhythms: return "When things usually happen here"
         case .rain:    return "How much falls, how often, and how long between"
-        case .history: return "A month, a season, or the whole record"
+        case .compare: return "This stretch against the same stretch in other years"
+        case .history: return "What one day, month or season was like"
+        case .forecastCheck: return "Each morning's forecast against the high that happened"
         case .wind:    return "Where it comes from, and when that turns"
         case .explore: return "The days when anything happened"
         case .pattern: return "The 500 mb wave that steers all of it"
@@ -145,7 +159,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
             switch self {
             case .today:   return [.now, .forecast, .map]
             case .climate: return [.rhythms, .rain, .wind]
-            case .record:  return [.history, .explore]
+            case .record:  return [.compare, .history, .forecastCheck, .explore]
             case .beyond:  return [.pattern]
             case .forecasters: return [.videos, .blog]
             case .equipment: return [.station]
@@ -163,7 +177,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
     var needsStation: Bool {
         switch self {
         case .map, .pattern, .videos, .blog: return false
-        case .now, .forecast, .rhythms, .rain, .history, .wind, .explore, .station: return true
+        case .now, .forecast, .rhythms, .rain, .compare, .history, .forecastCheck, .wind, .explore, .station: return true
         }
     }
 }

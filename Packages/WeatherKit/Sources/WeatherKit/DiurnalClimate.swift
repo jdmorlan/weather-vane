@@ -9,8 +9,7 @@
 //  keeping: `DailyRecord` stores a day as its min, max and means, so "the
 //  afternoon peaks at a quarter to four in July and two in January" is a
 //  question the daily archive cannot express — a high of 96° says nothing about
-//  WHEN. `DayWindows` got at the shape inside a day but only for the last month,
-//  because it reads the live API. `SampleArchive` is what makes this possible:
+//  WHEN. `SampleArchive` is what makes this possible:
 //  every minute of every archived day, on disk, going back to the start of the
 //  record.
 //

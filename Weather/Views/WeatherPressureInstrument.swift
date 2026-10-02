@@ -76,7 +76,12 @@ struct PressureInstrument: View {
                 Text("inHg").font(.caption2).foregroundStyle(.tertiary)
             }
             if let delta3h, abs(delta3h) >= 0.01 {
-                Text(String(format: "%+.2f over 3h", delta3h))
+                // FORECAST, and said so. The arrow beside it is the measured
+                // trend of the last few hours; this is the next three. Printed
+                // as bare "+0.10 over 3h" beside a falling arrow it read as a
+                // contradiction (Oct 2, 2026: falling, forecast to rise after
+                // the rain) when it was two different times.
+                Text(String(format: "%+.2f next 3h", delta3h))
                     .font(.callout).foregroundStyle(.secondary)
             }
         }

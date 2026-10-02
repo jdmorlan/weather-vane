@@ -22,21 +22,79 @@ import WeatherKit
 
 // MARK: - The card itself
 
-/// The dashboard's one container: a small-caps label over whatever it holds.
-struct StationCard<Content: View>: View {
+/// The dashboard's one container: a small-caps label over whatever it holds,
+/// and optionally a control at the label's right end — a chart's view switcher.
+struct StationCard<Content: View, Accessory: View>: View {
     let label: String
+    @ViewBuilder var accessory: Accessory
     @ViewBuilder var content: Content
 
     var body: some View {
         VStack(alignment: .leading, spacing: 14) {
-            Text(label.uppercased())
-                .font(.caption.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary)
+            HStack(alignment: .center, spacing: 8) {
+                Text(label.uppercased())
+                    .font(.caption.weight(.semibold)).tracking(0.8).foregroundStyle(.secondary)
+                Spacer(minLength: 0)
+                accessory
+            }
             content
         }
         .padding(20)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
         .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.primary.opacity(0.07)))
+    }
+}
+
+extension StationCard where Accessory == EmptyView {
+    init(label: String, @ViewBuilder content: () -> Content) {
+        self.label = label
+        self.accessory = EmptyView()
+        self.content = content()
+    }
+}
+
+// MARK: - Chart views
+
+/// The ways a chart can draw the same numbers. Every year as its own line, or
+/// this year against the usual — and, where it makes sense for the data, the
+/// departures from normal that History draws, as a third view to come rather
+/// than a separate kind of chart.
+enum ChartView: String, CaseIterable, Identifiable {
+    case years, usual
+    var id: String { rawValue }
+    var label: String {
+        switch self {
+        case .years: return "Years"
+        case .usual: return "Usual"
+        }
+    }
+}
+
+/// `Years | Usual` in a card's corner, remembered per chart so a choice
+/// survives leaving the page.
+struct ChartViewSwitch: View {
+    let key: String
+    var options: [ChartView] = ChartView.allCases
+    @Binding var selection: ChartView
+
+    var body: some View {
+        Picker("View", selection: Binding(get: { selection }, set: { new in
+            selection = new
+            UserDefaults.standard.set(new.rawValue, forKey: key)
+        })) {
+            ForEach(options) { Text($0.label).tag($0) }
+        }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .controlSize(.small)
+        .fixedSize()
+        .help("Every year as its own line, or this year against the usual")
+    }
+
+    /// What this chart was last set to. Every year's line by default.
+    static func stored(_ key: String) -> ChartView {
+        UserDefaults.standard.string(forKey: key).flatMap(ChartView.init(rawValue:)) ?? .years
     }
 }
 
@@ -101,6 +159,13 @@ struct RightNowCard: View {
     /// Inches per hour from the station's newest wet minute, while it's raining.
     /// The conditions word alone ("Moderate Rain") says nothing about how much.
     var rainRate: Double?
+    /// Today against this date in the record — one line, and the door to
+    /// Compare. It was a card of its own near the bottom of Now, with two charts
+    /// in it; the charts are Compare's job now, and what Now keeps is the
+    /// sentence and the way in. Nil without an archive (the phone).
+    var comparison: ClimateComparison?
+    var dateLabel: String = ""
+    var onCompare: (() -> Void)?
 
     @EnvironmentObject private var settings: AppSettings
     #if os(iOS)
@@ -156,30 +221,70 @@ struct RightNowCard: View {
                 }
                 VStack(alignment: .leading, spacing: 4) {
                     conditionsLine.font(.title3.weight(.medium))
+                    if radarSaysRainGaugeDoesnt {
+                        Text("WeatherFlow's radar shows \(r.conditions.lowercased()) here — your gauge \(measuredToday ? "isn't measuring any right now" : "hasn't caught any today").")
+                            .font(.caption).foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     // No "feels like" here: the gauge below states it AND places
                     // it on a scale, which is strictly more than this line said.
                     todayHiLo.font(.headline)
                 }
                 Spacer(minLength: 0)
-                Image(systemName: WeatherView.symbol(r.icon))
+                // The icon is WeatherFlow's too; when it draws rain the gauge
+                // isn't measuring, it gives way to a plain cloud rather than
+                // contradict the word beside it.
+                Image(systemName: radarSaysRainGaugeDoesnt ? "cloud" : WeatherView.symbol(r.icon))
                     .font(.system(size: 38)).symbolRenderingMode(.multicolor)
                     .foregroundStyle(.tint)
             }
             // The interpreter's one-line answer, which the dashboard never showed.
             Text(r.headline).font(.callout.weight(.medium))
                 .fixedSize(horizontal: false, vertical: true)
+            if let onCompare { compareLine(onCompare) }
             Divider()
             comfortGauges
             pressureRow
         }
     }
 
-    /// Tempest's conditions word, except while the station is measuring rain:
-    /// then the word comes from the measured rate, with the rate beside it.
-    /// Tempest's "Moderate Rain" over a 0.06 in/hr reading put a word and a
-    /// number side by side that disagreed — and the rain card below, which uses
-    /// the same scale as this, said "light".
+    /// "6° warmer than usual for Oct 2 · Compare →". Before 8am that's today's
+    /// FORECAST against the record; by tomorrow the same date in Compare is what
+    /// actually happened — which is why the door says Compare, not History.
+    private func compareLine(_ onCompare: @escaping () -> Void) -> some View {
+        HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "square.stack.3d.up")
+                .font(.caption).foregroundStyle(.tint)
+            Text(comparison?.headline ?? "Today against \(dateLabel) in other years")
+                .font(.callout).foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if let rank = comparison?.rankText {
+                Text(rank)
+                    .font(.caption.weight(.semibold))
+                    .padding(.horizontal, 7).padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.18), in: Capsule())
+            }
+            Spacer(minLength: 0)
+            Button("Compare →", action: onCompare)
+                .buttonStyle(.link)
+                .help("Today against every \(dateLabel) on record")
+        }
+    }
+
+    /// THE GAUGE FIRST. The conditions word is not a reading: it comes from
+    /// WeatherFlow's forecast service, written from radar, models and nearby
+    /// stations. Shown bare in a card called "Right now", beside the station's
+    /// own temperature, it read as something the station measured — and on
+    /// Oct 2, 2026 it said "Light Rain" over a gauge that had recorded nothing,
+    /// which made no sense to anyone looking at it.
+    ///
+    /// So: while the gauge measures rain, the word comes from the measured
+    /// rate, with the rate beside it. When WeatherFlow says rain and the gauge
+    /// doesn't, the word is the gauge's — "No rain at the gauge" — and
+    /// WeatherFlow's call goes underneath, labelled as theirs. That's also how a
+    /// blocked or sleeping rain sensor shows itself.
     private var conditionsLine: Text {
+        if radarSaysRainGaugeDoesnt { return Text("No rain at the gauge") }
         guard let rate = rainRate else { return Text(r.conditions) }
         let word = RainIntensity.of(rate: rate).label.capitalized
         let number = Text(String(format: "(%.2f in/hr)", rate))
@@ -187,6 +292,15 @@ struct RightNowCard: View {
             .foregroundStyle(Color.accentColor)
         return Text("\(word) \(number)")
     }
+
+    /// WeatherFlow's word names falling water, and the gauge isn't measuring
+    /// any right now.
+    private var radarSaysRainGaugeDoesnt: Bool {
+        rainRate == nil && r.conditionsSayPrecipitation
+    }
+
+    /// Whether the gauge has measured anything today at all.
+    private var measuredToday: Bool { (r.precipToday ?? 0) >= 0.01 }
 
     private var hasInstruments: Bool {
         (r.days.first?.sunrise != nil && r.days.first?.sunset != nil) || r.windDirection != nil
@@ -452,13 +566,11 @@ struct TodayCard: View {
 
 // MARK: - 10-day
 
-/// Ten day boxes made you difference ten pairs of numbers by eye to answer the
-/// only questions a week-out forecast gets asked — when does it break, when does
-/// the muggy stretch end, which day does the rain land on. The grid is gone; the
-/// week is one figure. The words that the boxes couldn't hold lead, as in Hourly.
+/// One box a day — see `DayColumns` for why the single-figure ribbon that was
+/// here went back to boxes. The week's comfort sentence still leads.
 ///
 /// `header` is the forecast's own report card on the Mac, where there is a
-/// History to send "Detail" to. It is a slot rather than a model because the
+/// Forecast Check page to send "Detail" to. It is a slot rather than a model because the
 /// grade needs the forecast log's finished days, and a device that has kept no
 /// log has nothing to put there.
 struct TenDayCard<Header: View>: View {
@@ -473,26 +585,11 @@ struct TenDayCard<Header: View>: View {
                     Text(week).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                OutlookRibbon(days: report.days, timezone: report.timezone)
-                HStack(spacing: 10) {
-                    legendSwatch(.orange, "high")
-                    legendSwatch(.blue.opacity(0.75), "low")
-                    if report.days.contains(where: { !$0.parts.isEmpty }) {
-                        Text("humidity: night · morning · afternoon · evening")
-                            .foregroundStyle(.tertiary)
-                    }
-                    Spacer(minLength: 0)
-                    Text("\(Platform.pointVerb) a day for the rest").foregroundStyle(.tertiary)
-                }
-                .font(.caption2)
+                DayColumns(days: report.days, timezone: report.timezone)
+                Text("Bars: each day's low to high, on one scale for all ten days. Rain: the chance, and the amount where the hourly forecast reaches.")
+                    .font(.caption2).foregroundStyle(.tertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-        }
-    }
-
-    private func legendSwatch(_ color: Color, _ label: String) -> some View {
-        HStack(spacing: 4) {
-            Capsule().fill(color).frame(width: 10, height: 2.5)
-            Text(label).foregroundStyle(.secondary)
         }
     }
 }
@@ -530,5 +627,17 @@ enum StationClock {
         c.timeZone = r.timezone ?? .current
         c.locale = Locale(identifier: "en_US")
         return c
+    }
+}
+
+
+extension WeatherReport {
+    /// WeatherFlow's conditions word names falling water — rain, drizzle,
+    /// showers, storms, sleet, snow. A word, not a measurement: see
+    /// `RightNowCard.conditionsLine`.
+    var conditionsSayPrecipitation: Bool {
+        let word = conditions.lowercased()
+        return ["rain", "drizzle", "shower", "thunder", "storm", "sleet", "snow", "hail"]
+            .contains { word.contains($0) }
     }
 }

@@ -18,12 +18,15 @@ struct WeatherApp: App {
     @StateObject private var settings = AppSettings()
     /// The forecaster video playing, if any. See `VideoPlayer`.
     @StateObject private var playback = VideoPlayback()
+    /// What the person's own rain gauge caught — every device, synced.
+    @StateObject private var rainLog = RainLogStore()
 
     var body: some Scene {
         WindowGroup {
             root
                 .environmentObject(settings)
                 .environmentObject(playback)
+                .environmentObject(rainLog)
             #if os(macOS)
                 // Wider than the old two-tab window: the sidebar takes ~190pt
                 // and the cards were already laid out to 1180.

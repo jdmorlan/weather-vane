@@ -235,3 +235,19 @@ extension View {
         frame(maxWidth: .infinity, minHeight: minHeight)
     }
 }
+
+// MARK: - Hover readout line
+
+extension View {
+    /// The line under a chart that names the hovered point. ONE LINE, ALWAYS
+    /// THERE: it used to appear only while hovering — and wrap when it listed
+    /// several years — so every card grew under the pointer and the page
+    /// jumped. Now the space is reserved whether or not anything is hovered,
+    /// and a long readout truncates instead of wrapping.
+    func readoutLine() -> some View {
+        self
+            .lineLimit(1)
+            .truncationMode(.tail)
+            .frame(maxWidth: .infinity, minHeight: 18, maxHeight: 18, alignment: .leading)
+    }
+}
