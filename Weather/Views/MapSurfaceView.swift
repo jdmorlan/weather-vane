@@ -121,6 +121,12 @@ struct MapSurfaceView: View {
     @State private var surface: MapSurface = .storms
     /// The layers sheet, on a compact width only. See `controls`.
     @State private var showingLayers = false
+    /// The view bar's ⓘ — whether its colours and explanation are open.
+    @State private var barKeyOpen = false
+    /// Whether the view picker is open into its list.
+    @State private var viewListOpen = false
+    /// Whether the radar site chip is open into its list.
+    @State private var siteListOpen = false
     #if os(iOS)
     @Environment(\.horizontalSizeClass) private var sizeClass
     @Environment(\.verticalSizeClass) private var verticalSizeClass
@@ -156,6 +162,9 @@ struct MapSurfaceView: View {
     /// Failed tiles belonging to the frame currently being drawn, which is a much
     /// narrower thing than `progress.failed`.
     @State private var onScreenFailed = 0
+    /// When the frame on screen last had nothing drawn while there was nothing
+    /// left to wait for — the scans in, no tile failed. See `fieldStatus`.
+    @State private var blankSince: Date?
     /// When the picture last became incomplete. A load that finishes quickly
     /// should say nothing at all — a status line that flashes on every pan is
     /// worse than no status line.
@@ -223,6 +232,33 @@ struct MapSurfaceView: View {
             canvas
             controls.padding(14)
         }
+        // The view, top left — on a window with room for it. A phone keeps
+        // its one corner button; see `controls`.
+        .overlay(alignment: .topLeading) {
+            if !isCompact {
+                ZStack(alignment: .topLeading) {
+                    // A click anywhere else closes the list, as it would a menu.
+                    if viewListOpen {
+                        Color.clear.contentShape(Rectangle())
+                            .onTapGesture {
+                                withAnimation(.spring(duration: 0.24, bounce: 0.1)) { viewListOpen = false }
+                            }
+                    }
+                    MapViewPicker(surface: $surface, expanded: $viewListOpen, captions: captions)
+                        .padding(14)
+                }
+            }
+        }
+        // A click anywhere on the map closes the site list, as it would a
+        // menu. Under the bar, so the list itself still takes clicks.
+        .overlay {
+            if siteListOpen {
+                Color.clear.contentShape(Rectangle())
+                    .onTapGesture {
+                        withAnimation(.spring(duration: 0.22, bounce: 0.1)) { siteListOpen = false }
+                    }
+            }
+        }
         .overlay(alignment: .bottom) {
             // The padding lives here, not on the timeline: the timeline is absent
             // under the fire view, and a status bar flush against the
@@ -233,7 +269,7 @@ struct MapSurfaceView: View {
                                  : AnyLayout(VStackLayout(spacing: 8))
             layout {
                 status
-                timeline
+                if isCompact { timeline } else { viewBar }
             }
             .padding(.bottom, isShort ? 6 : 16)
             // On whether there IS a status, not on its content. Animating the
@@ -254,6 +290,8 @@ struct MapSurfaceView: View {
         // another view or day cancels the old poll and starts the new one.
         .task(id: "\(surface.rawValue)|\(outlookKey.map { "\($0.period)" } ?? "")") {
             guard let key = outlookKey else { return }
+            // The product's other days too, so picking one is instant.
+            async let _ = outlooks.warm(key.product)
             await outlooks.keepCurrent(key)
         }
         // NEW SCANS NEED FETCHING TOO, and nothing else asks for them. The list
@@ -272,7 +310,12 @@ struct MapSurfaceView: View {
         .onChange(of: satellite.stamps) { _, _ in
             prefetch(layerID: currentLayerID, tiles: visibleTiles)
         }
-        .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
+        .onChange(of: radarSiteChoice) { _, _ in
+            radar.site = resolvedSite
+            // Picking a radar is asking to see what it sees: centre on the
+            // site, wide enough to take in the ground it covers well.
+            if let site = resolvedSite { focus(on: site) }
+        }
         .onChange(of: settings.homeLat) { _, _ in radar.site = resolvedSite }
         .onChange(of: radarModeChoice) { _, new in radar.mode = new }
         // Never on its side: there a sheet opens full height and hides the very
@@ -351,7 +394,11 @@ struct MapSurfaceView: View {
             }
             satellite.tick(delta: delta)
             let head = satellite.playhead
-            return ["cloud": playhead(head.a, head.b, blend: head.blend)]
+            var out = playhead(head.a, head.b, blend: head.blend)
+            // EVERY FRAME AT ONE LEVEL: the coarse pass until every frame is
+            // sharp. See `FieldRenderer.Playhead.levelsUp`.
+            out.levelsUp = loopIsSharp ? 0 : Self.overviewLevels
+            return ["cloud": out]
         case .fire:
             return ["fire": .init(stampA: fireStamp, stampB: fireStamp)]
         case .storms, .excessiveRain, .rainTotals:
@@ -425,9 +472,20 @@ struct MapSurfaceView: View {
     /// be — a further 64x magnification off a z8 base is a wash rather than a
     /// picture. At 16x a storm is soft but unmistakably a storm in the right
     /// county, which is the whole job while the real tiles are in flight.
+    /// How far up the coarse pass sits. The loop is drawn from it until it's
+    /// sharp, so the two must agree.
+    private static let overviewLevels = 2
+
+    /// Every frame sharp, or nothing left that will make it sharper — a tile
+    /// the service won't serve mustn't hold the whole loop coarse.
+    private var loopIsSharp: Bool {
+        progress.frameCount > 0 && (progress.allFramesReady || progress.inFlight == 0)
+    }
+
     private func overview(of tiles: [FieldTileGrid.Tile]) -> [FieldTileGrid.Tile] {
         guard let source = currentSource else { return [] }
-        return FieldTileGrid.parents(of: tiles, levelsUp: 2, notBelow: source.zoomRange.lowerBound)
+        return FieldTileGrid.parents(of: tiles, levelsUp: Self.overviewLevels,
+                                     notBelow: source.zoomRange.lowerBound)
     }
 
     /// The fire service takes no TIME argument, so "refresh" means asking under
@@ -450,27 +508,48 @@ struct MapSurfaceView: View {
     /// Say what is outstanding when the map has been incomplete for a while —
     /// once every fifteen seconds, in the radar log, so a stall can be read
     /// rather than guessed at.
+    ///
+    /// NOT ONLY WHILE SCANS ARE DOWNLOADING. It used to be, and so it said
+    /// nothing on the morning the scans were all in and every drawn tile was
+    /// being thrown away — the stall that most needed reading. The eviction
+    /// count in the line is what tells those two apart.
     private func reportIfStuck(_ now: FieldTileStore.Progress) {
-        guard surface == .radar, radar.scansReady < radar.frames.count,
+        guard surface == .radar,
               let since = incompleteSince, Date().timeIntervalSince(since) > 15,
               Date().timeIntervalSince(lastStuckReport ?? .distantPast) > 15 else { return }
         lastStuckReport = Date()
         let flying = FieldTileStore.shared.inFlightSample()
+        let evicted = FieldTileStore.shared.recentEvictions
+        let scans = "\(radar.scansReady)/\(radar.frames.count)"
         let site = radar.site?.id ?? "none"
         Task {
             let frames = await Level2Frames.shared.snapshot()
             radarLog.notice("""
                 STUCK \(site, privacy: .public): held \(now.held)/\(now.wanted), inFlight \(now.inFlight), \
-                failed \(now.failed), frames \(now.readyFrames)/\(now.frameCount); \
+                failed \(now.failed), frames \(now.readyFrames)/\(now.frameCount), \
+                scans \(scans, privacy: .public), evicted \(evicted) in 5s; \
                 store inFlight \(flying.total) e.g. \(flying.keys, privacy: .public); \(frames, privacy: .public)
                 """)
         }
     }
 
     private func watchProgress() async {
+        // Whatever the map was keeping is released when it goes away.
+        defer { FieldTileStore.shared.keepNothing() }
         while !Task.isCancelled {
             try? await Task.sleep(for: .milliseconds(250))
-            guard !visibleTiles.isEmpty, let currentSource else { progress = .init(); continue }
+            guard !visibleTiles.isEmpty, let currentSource else {
+                progress = .init()
+                blankSince = nil
+                FieldTileStore.shared.keepNothing()
+                continue
+            }
+            // The loop in view is kept out of the cache's reach — see
+            // `FieldTileStore.keep`. Coarse pass first: it is small and it is
+            // what every frame falls back to.
+            FieldTileStore.shared.keep(stamps: currentStamps,
+                                       passes: [overview(of: visibleTiles), visibleTiles],
+                                       from: currentSource)
             let now = FieldTileStore.shared.progress(stamps: currentStamps,
                                                      tiles: visibleTiles,
                                                      from: currentSource)
@@ -484,10 +563,24 @@ struct MapSurfaceView: View {
                                                  from: currentSource).allFramesReady
             // Counted against the ONE frame on screen. `progress.failed` is the
             // whole loop's tally, and a loop is ten frames — see `fieldStatus`.
-            onScreenFailed = onScreenStamps.isEmpty
-                ? 0
+            let onScreen = onScreenStamps.isEmpty
+                ? FieldTileStore.Progress()
                 : FieldTileStore.shared.progress(stamps: onScreenStamps, tiles: visibleTiles,
-                                                 from: currentSource).failed
+                                                 from: currentSource)
+            onScreenFailed = onScreen.failed
+            // NOTHING DRAWN, NOTHING TO WAIT FOR. Scans in, no tile refused,
+            // and still not one tile of this frame held: the data arrived but
+            // the picture isn't staying. Counted against the coarse pass as
+            // well, since the renderer draws from it when a sharp tile is out.
+            let coarseOnScreen = onScreenStamps.isEmpty ? FieldTileStore.Progress()
+                : FieldTileStore.shared.progress(stamps: onScreenStamps, tiles: coarse,
+                                                 from: currentSource)
+            if loopIsReady, onScreen.wanted > 0, onScreen.held == 0,
+               coarseOnScreen.held == 0, onScreen.failed == 0 {
+                if blankSince == nil { blankSince = Date() }
+            } else {
+                blankSince = nil
+            }
             if now.isComplete { incompleteSince = nil; lastStuckReport = nil }
             else if incompleteSince == nil { incompleteSince = Date() }
             reportIfStuck(now)
@@ -571,6 +664,18 @@ struct MapSurfaceView: View {
         if onScreenFailed > 0 {
             return FieldStatus(message: "Part of the map didn't load",
                                detail: "It will try again on its own", canRetry: true)
+        }
+        // THE DATA ARRIVED BUT THE PICTURE ISN'T STAYING. Said rather than left
+        // as rings over an empty map, which reads as clear sky. Three seconds,
+        // because a frame's tiles are drawn in milliseconds once its scan is in.
+        if let blankSince, Date().timeIntervalSince(blankSince) > 3 {
+            let pressure = FieldTileStore.shared.recentEvictions > 50
+            return FieldStatus(
+                message: surface == .radar ? "The radar downloaded but isn't drawing"
+                                           : "The map downloaded but isn't drawing",
+                detail: pressure ? "Your \(Platform.deviceNoun) is short on memory and is discarding the picture as it's drawn"
+                                 : "Nothing is being drawn from it",
+                canRetry: true)
         }
         // Only after it has been incomplete for a beat. A pan that resolves in
         // 300ms should say nothing.
@@ -801,6 +906,12 @@ struct MapSurfaceView: View {
 
     // MARK: Camera
 
+    private func focus(on site: RadarSite) {
+        focusToken += 1
+        focus = MapFocus(center: CLLocationCoordinate2D(latitude: site.latitude, longitude: site.longitude),
+                         radiusMeters: RadarRange.regional.radius, token: focusToken)
+    }
+
     private func recenterHome() {
         guard let home = settings.homeCoordinate else { return }
         focusToken += 1
@@ -833,7 +944,13 @@ struct MapSurfaceView: View {
                 }
             }
         } else {
-            panel(fillsWidth: false)
+            // The map's own tools. The view is chosen top left, and set along
+            // the bottom — see `MapControls.swift`.
+            let recenter: (() -> Void)? = settings.hasHome ? { recenterHome() } : nil
+            MapTools(layers: layers.filter { $0.role == .context },
+                     context: $context,
+                     warningCount: warningOutlines().count,
+                     recenter: recenter)
         }
     }
 
@@ -929,12 +1046,141 @@ struct MapSurfaceView: View {
                           togglePlay: { radar.isPlaying.toggle() },
                           scrub: { radar.scrub(to: $0) })
         } else if surface == .cloud, !satellite.frames.isEmpty {
-            RadarScrubBar(loop: satellite.frames,
-                          index: satellite.index,
-                          isPlaying: satellite.isPlaying,
-                          togglePlay: { satellite.isPlaying.toggle() },
-                          scrub: { satellite.scrub(to: $0) })
+            // The key over the strip, as the forecasts put theirs: what the
+            // colours mean, and what they say about home.
+            VStack(spacing: 8) {
+                SatelliteKey(source: satelliteSource, newest: satellite.newest, home: homePoint)
+                RadarScrubBar(loop: satellite.frames,
+                              index: satellite.index,
+                              isPlaying: satellite.isPlaying,
+                              togglePlay: { satellite.isPlaying.toggle() },
+                              scrub: { satellite.scrub(to: $0) })
+            }
         }
+    }
+}
+
+// MARK: - The view's bar
+
+extension MapSurfaceView {
+    /// Everything about the view on screen, along the bottom: home and the key
+    /// on top, then its settings and its time. See `MapViewBar`.
+    @ViewBuilder var viewBar: some View {
+        switch surface {
+        case .radar:
+            MapViewBar(hasKey: false, keyOpen: $barKeyOpen, hasTop: false, hasSettings: true) {
+                EmptyView()
+            } settings: {
+                RadarSiteChip(choice: $radarSiteChoice, open: $siteListOpen, home: settings.homeCoordinate)
+                // Two ways of looking: the loop reads direction, the sweep
+                // shows how the picture is made. See `RadarModel.Mode`.
+                BarChoices(options: [
+                    BarOption(value: RadarModel.Mode.loop, icon: "repeat", text: nil, title: "Loop",
+                              detail: "The latest scans played over and over. Watch which way the rain is moving, and how fast."),
+                    BarOption(value: RadarModel.Mode.sweep, icon: "dot.radiowaves.right", text: nil, title: "Sweep",
+                              detail: "Each new scan drawn in as the dish turns, the way the radar builds the picture. Shows when the next one lands."),
+                ], selection: $radarModeChoice)
+            } when: {
+                radarWhen
+            }
+        case .cloud:
+            MapViewBar(hasKey: true, keyOpen: $barKeyOpen, hasTop: true, hasSettings: true) {
+                SatelliteKey(source: satelliteSource, newest: satellite.newest, home: homePoint,
+                             inBar: true, showsKey: barKeyOpen)
+            } settings: {
+                BarChoices(options: [
+                    BarOption(value: SatelliteFieldSource.Band.infrared, icon: "thermometer.snowflake", text: nil,
+                              title: "Infrared",
+                              detail: "Cloud tops by how cold they are. Colder is higher, so the tallest storms stand out. Works day and night."),
+                    BarOption(value: .visible, icon: "sun.max", text: nil, title: "Visible",
+                              detail: "Sunlight off the clouds, the closest thing to a photograph. The sharpest of the three, and dark after sunset."),
+                    BarOption(value: .waterVapor, icon: "humidity", text: nil, title: "Water vapour",
+                              detail: "Moisture high in the atmosphere, not clouds. Brown is dry, sinking air; white and blue is moist, rising air. The loop shows the troughs that steer the weather."),
+                ], selection: $satellite.band)
+            } when: {
+                if satellite.frames.isEmpty {
+                    waiting("Loading the scans…")
+                } else {
+                    RadarScrubBar(loop: satellite.frames, index: satellite.index,
+                                  isPlaying: satellite.isPlaying,
+                                  togglePlay: { satellite.isPlaying.toggle() },
+                                  scrub: { satellite.scrub(to: $0) }, chrome: false)
+                }
+            }
+        case .storms, .excessiveRain, .rainTotals:
+            if let key = outlookKey, let product = surface.forecast {
+                MapViewBar(hasKey: true, keyOpen: $barKeyOpen, hasTop: true, hasSettings: false) {
+                    OutlookLegend(product: key.product, period: key.period,
+                                  state: outlooks.state(key),
+                                  home: homePoint,
+                                  homeCounty: homePoint.flatMap { countyLines.county(containing: $0) },
+                                  retry: { Task { await outlooks.load(key, force: true) } },
+                                  inBar: true, showsKey: barKeyOpen)
+                } settings: {
+                    EmptyView()
+                } when: {
+                    ForecastDayPicker(product: product,
+                                      period: Binding(get: { forecastPeriods[product] ?? 1 },
+                                                      set: { forecastPeriods[product] = $0 }),
+                                      window: outlookWindow(key))
+                }
+            }
+        case .fire:
+            MapViewBar(hasKey: false, keyOpen: $barKeyOpen, hasTop: false, hasSettings: true) {
+                EmptyView()
+            } settings: {
+                BarChoices(options: [
+                    BarOption(value: TexasFireFieldSource.Product.burnBan, icon: "nosign", text: nil,
+                              title: "Burn bans",
+                              detail: "Counties where outdoor burning is banned. Each county's commissioners decide, so this is a decision, not a forecast."),
+                    BarOption(value: .activeFires, icon: "flame", text: nil, title: "Active fires",
+                              detail: "Wildfires the Texas A&M Forest Service is responding to now."),
+                ], selection: $fireProduct)
+            } when: {
+                // A snapshot, not a loop: what each county has decided, read
+                // fresh every hour.
+                waiting("Texas A&M Forest Service · checked every hour")
+            }
+        }
+    }
+
+    /// Loop or sweep, whichever is on — or what it's waiting for.
+    @ViewBuilder private var radarWhen: some View {
+        if radar.frames.isEmpty {
+            waiting(radar.site.map { "Loading \($0.id)'s scans…" } ?? "No radar chosen")
+        } else if radar.mode == .sweep {
+            SweepBar(site: radar.site?.id ?? "",
+                     shown: radar.frames.first { $0.key == radar.sweepShown },
+                     revealing: radar.frames.first { $0.key == radar.sweepRevealing },
+                     facts: radar.scanFacts,
+                     newest: radar.frames.last,
+                     interval: radar.scanInterval,
+                     dish: radar.dish,
+                     chrome: false)
+        } else {
+            RadarScrubBar(loop: radar.frames, index: radar.index, isPlaying: radar.isPlaying,
+                          togglePlay: { radar.isPlaying.toggle() },
+                          scrub: { radar.scrub(to: $0) }, chrome: false)
+        }
+    }
+
+    private func waiting(_ text: String) -> some View {
+        Text(text).font(.callout).foregroundStyle(.secondary)
+            .lineLimit(1)
+            .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// The window the chosen forecast day covers, in local time — "today 7 AM
+    /// – tomorrow 7 AM" — once it has loaded.
+    private func outlookWindow(_ key: OutlookModel.Key) -> String? {
+        let outlook: Outlook?
+        switch outlooks.state(key) {
+        case .loaded(let o, _): outlook = o
+        case .failed(_, let last): outlook = last
+        case .loading: outlook = nil
+        }
+        guard let from = outlook?.validFrom, let until = outlook?.validUntil else { return nil }
+        return When.range(from, until)
     }
 }
 

@@ -100,6 +100,17 @@ final class OutlookModel: ObservableObject {
         }
     }
 
+    /// Every day of a product, fetched together — so picking another day shows
+    /// it at once instead of a "Loading…" in its place. They're small, and
+    /// `load` skips any still fresh.
+    func warm(_ product: OutlookProduct) async {
+        await withTaskGroup(of: Void.self) { group in
+            for period in product.periods {
+                group.addTask { await self.load(Key(product: product, period: period)) }
+            }
+        }
+    }
+
     /// Keep the chosen outlook current for as long as it is on screen.
     func keepCurrent(_ key: Key) async {
         while !Task.isCancelled {
@@ -157,16 +168,111 @@ struct OutlookLegend: View {
     let home: GeoPoint?
     let homeCounty: County?
     let retry: () -> Void
+    /// Inside `MapViewBar`: no card of its own, and the key — the header,
+    /// swatches, explanation and issue time — only when the bar's ⓘ is on.
+    /// Home's line, and anything gone wrong, always show.
+    var inBar = false
+    var showsKey = true
 
     @State private var explaining = false
+    /// The bar's last answer, held up while the next day loads.
+    @State private var lastBar: BarText?
 
     var body: some View {
+        Group {
+            if inBar && !showsKey {
+                barLine
+            } else {
+                card
+            }
+        }
+        .onChange(of: barText, initial: true) { _, new in
+            if case .loading = state { return }
+            lastBar = new
+        }
+        // Another product's words would be about a different map.
+        .onChange(of: product) { _, _ in lastBar = nil }
+    }
+
+    /// THE BAR'S ONE BLOCK, THE SAME SIZE IN EVERY STATE: a headline, and two
+    /// lines held for what it means. Loading, an expired forecast, an empty
+    /// map and a failure each used to add or drop a line, and the bar jumped
+    /// whenever a day was picked. Here they say themselves in those same
+    /// three lines; the rest is behind the ⓘ.
+    private var barLine: some View {
+        // WHILE A DAY LOADS, THE LAST ONE STAYS UP, DIMMED. Swapping in a
+        // "Loading…" line for the half second a day took made every pick
+        // flash twice — out to the loading line, back to the answer.
+        let loading: Bool = { if case .loading = state { return true } else { return false } }()
+        let shown = loading ? (lastBar ?? barText) : barText
+        return HStack(alignment: .firstTextBaseline, spacing: 8) {
+            Image(systemName: "house.fill").font(.system(size: 11))
+                .foregroundStyle(shown.colour)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(shown.headline).font(.callout.weight(shown.weight)).lineLimit(1)
+                Text(shown.meaning).font(.caption).foregroundStyle(.secondary)
+                    .lineLimit(2, reservesSpace: true)
+            }
+            .contentTransition(.opacity)
+            .opacity(loading && lastBar != nil ? 0.5 : 1)
+            .animation(.easeOut(duration: 0.18), value: shown)
+            Spacer(minLength: 0)
+            if case .failed = state {
+                Button("Try again", action: retry).buttonStyle(.borderless).font(.callout)
+            }
+        }
+    }
+
+
+    struct BarText: Equatable {
+        var headline: String
+        var meaning: String
+        var colour: Color
+        var weight: Font.Weight
+        init(_ headline: String, _ meaning: String, _ colour: Color, _ weight: Font.Weight) {
+            self.headline = headline; self.meaning = meaning; self.colour = colour; self.weight = weight
+        }
+    }
+
+    private var barText: BarText {
+        let place = homeCounty.map { "Home (\($0.name) County)" } ?? "Home"
+        func read(_ outlook: Outlook) -> BarText {
+            guard let home else { return BarText("Set your home to see where it falls", "", .secondary, .medium) }
+            let category = outlook.category(at: home)
+            let area = outlook.areas.last { $0.category == category }
+            var meaning = category.map(\.meaning) ?? noRiskMeaning ?? ""
+            if outlook.isExpired() { meaning = "This forecast's window has closed; a newer one hasn't loaded yet." }
+            return BarText(homeHeadline(category), meaning, area.map { $0.stroke.color } ?? .secondary, .medium)
+        }
+        switch state {
+        case .loading:
+            return BarText("Loading \(product.issuer)'s \(product.label.lowercased()), \(product.periodName(period))…",
+                           "", .secondary, .regular)
+        case .loaded(let outlook, _):
+            return read(outlook)
+        case .failed(let reason, let last):
+            if let last {
+                var text = read(last)
+                text.meaning = "Couldn't refresh: \(reason). Showing the last copy."
+                return text
+            }
+            return BarText("Couldn't load \(product.issuer)'s \(product.label.lowercased()) · \(place)", reason, .orange, .medium)
+        }
+    }
+
+    private var card: some View {
         VStack(alignment: .leading, spacing: 8) {
-            header
+            if showsKey { header }
             switch state {
             case .loading:
-                Text("Loading \(product.issuer)'s \(product.label.lowercased()), \(product.periodName(period))…")
-                    .font(.callout).foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text("Loading \(product.issuer)'s \(product.label.lowercased()), \(product.periodName(period))…")
+                        .font(.callout).foregroundStyle(.secondary)
+                    // The home line's height, held, so the bar doesn't
+                    // shrink and grow back each time a day is picked.
+                    if inBar { Text("").font(.caption).lineLimit(2, reservesSpace: true) }
+                }
+                .padding(.leading, inBar ? 19 : 0)
             case .loaded(let outlook, _):
                 content(outlook)
             case .failed(let reason, let last):
@@ -174,11 +280,8 @@ struct OutlookLegend: View {
                 if let last { content(last) }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .frame(maxWidth: 440, alignment: .leading)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
-        .padding(.horizontal, 16)
+        .mapCard(!inBar, maxWidth: 440)
+        .padding(.horizontal, inBar ? 0 : 16)
     }
 
     private var header: some View {
@@ -214,15 +317,19 @@ struct OutlookLegend: View {
         homeLine(outlook)
         if outlook.areas.isEmpty {
             Text(emptyMap).font(.caption).foregroundStyle(.secondary)
-        } else if product == .rainTotals {
-            RainTotalRamp(outlook: outlook, home: home.flatMap { outlook.category(at: $0) })
-        } else {
-            swatches(outlook)
+        } else if showsKey {
+            if product == .rainTotals {
+                RainTotalRamp(outlook: outlook, home: home.flatMap { outlook.category(at: $0) })
+            } else {
+                swatches(outlook)
+            }
         }
-        explanation
-        // Issued when, and when the office is due to reissue.
-        Text(outlook.stamp.line())
-            .font(.caption2).foregroundStyle(.tertiary)
+        if showsKey {
+            explanation
+            // Issued when, and when the office is due to reissue.
+            Text(outlook.stamp.line())
+                .font(.caption2).foregroundStyle(.tertiary)
+        }
     }
 
     /// WHERE YOU ARE FIRST. The map shows the country; this says which colour
@@ -238,7 +345,13 @@ struct OutlookLegend: View {
                     Text(homeHeadline(category)).font(.callout.weight(.medium))
                     // A rain band has no meaning beyond its amount, which the
                     // headline already says.
-                    if let meaning = category.map(\.meaning) ?? noRiskMeaning, !meaning.isEmpty {
+                    let meaning = category.map(\.meaning) ?? noRiskMeaning ?? ""
+                    if inBar {
+                        // Two lines held, so changing day never changes the
+                        // bar's height.
+                        Text(meaning).font(.caption).foregroundStyle(.secondary)
+                            .lineLimit(2, reservesSpace: true)
+                    } else if !meaning.isEmpty {
                         Text(meaning).font(.caption).foregroundStyle(.secondary)
                     }
                 }

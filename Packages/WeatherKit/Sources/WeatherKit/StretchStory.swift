@@ -102,6 +102,10 @@ public struct StretchStory: Equatable, Sendable {
     /// "September 2023", "Fall 2024", "2025".
     public var title: String
     public var days: [StoryDay]
+    /// The stretch's last calendar day, whether or not it has happened yet —
+    /// `days` stops at the latest day held, so a running month's charts use
+    /// this to keep their full width and leave the days to come empty.
+    public var lastDay: String
     /// In date order.
     public var events: [StoryEvent]
     /// Mean of (high − normal high) over the days held.
@@ -153,7 +157,7 @@ extension Climatology {
             return high - normal
         }
         let held = records.compactMap { $0 }
-        return StretchStory(title: title, days: days, events: events,
+        return StretchStory(title: title, days: days, lastDay: bounds.end, events: events,
                             departure: departures.isEmpty ? nil
                                 : departures.reduce(0, +) / Double(departures.count),
                             rain: held.reduce(0) { $0 + max(0, $1.precipTotal ?? 0) },

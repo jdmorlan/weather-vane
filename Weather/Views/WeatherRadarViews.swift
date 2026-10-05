@@ -125,6 +125,8 @@ struct RadarScrubBar: View {
     let isPlaying: Bool
     let togglePlay: () -> Void
     let scrub: (Int) -> Void
+    /// False inside `MapViewBar`, which draws the one card for the whole bar.
+    var chrome = true
 
     private var current: RadarFrame? { loop.indices.contains(index) ? loop[index] : nil }
 
@@ -145,10 +147,7 @@ struct RadarScrubBar: View {
 
             readout
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .frame(maxWidth: 680)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
+        .mapCard(chrome, maxWidth: 680)
     }
 
     /// The axis labelled at its two ends. The strip is for sweeping, not for
@@ -206,6 +205,8 @@ struct SweepBar: View {
     let interval: TimeInterval?
     /// What the dish is doing now, from the realtime feed. Nil without it.
     let dish: Level2Live.Dish?
+    /// False inside `MapViewBar`.
+    var chrome = true
 
     var body: some View {
         HStack(spacing: 14) {
@@ -228,10 +229,7 @@ struct SweepBar: View {
                 }
             }
         }
-        .padding(.horizontal, 14).padding(.vertical, 10)
-        .frame(maxWidth: 520)
-        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
-        .overlay(RoundedRectangle(cornerRadius: 12).strokeBorder(Color.primary.opacity(0.08)))
+        .mapCard(chrome, maxWidth: 520)
     }
 
     private var headline: String {

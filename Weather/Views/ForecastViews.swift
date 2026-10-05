@@ -90,6 +90,9 @@ struct ForecastPage<Grade: View>: View {
                             .font(.callout).foregroundStyle(.secondary)
                         DayColumns(days: Array(report.days.dropFirst(3)), timezone: tz,
                                    firstIsToday: false)
+                        Text(DayColumns.key)
+                            .font(.caption2).foregroundStyle(.tertiary)
+                            .fixedSize(horizontal: false, vertical: true)
                     }
                 }
             }

@@ -72,12 +72,48 @@ public protocol FieldTileSource: Sendable {
     /// Bytes to pixels, including whatever shading the field wants. Returning nil
     /// means the tile is unusable and the renderer leaves that square empty.
     func process(_ data: Data) -> CGImage?
+
+    /// How opaque the field's pixels typically are, for a dissolve that holds
+    /// the field's strength steady — see `FieldDissolve`. Nil fades plainly,
+    /// right for a field that is mostly clear with solid patches.
+    var dissolveOpacity: Double? { get }
 }
 
 public extension FieldTileSource {
     var tileSize: Int { 512 }
     var zoomRange: ClosedRange<Int> { 3...10 }
     var maxPixelScale: Double? { nil }
+    var dissolveOpacity: Double? { nil }
+}
+
+/// THE CROSSFADE'S TWO OPACITIES.
+///
+/// A plain fade — out at 1−b, in at b — is not a crossfade when both layers are
+/// see-through and stacked. Two layers of a field drawn at 82% each, faded to
+/// half, cover only 1 − (1 − 0.41)² ≈ 65% of the map between them. Over a field
+/// that covers the whole map — water vapour — that dip showed as the green land
+/// underneath flashing through at every frame change, and the eye followed the
+/// flash instead of the weather.
+///
+/// So the incoming frame fades in plainly, and the outgoing one fades out only
+/// as fast as the incoming one covers for it: coverage stays at the field's
+/// own all the way through. Coverage stacks the same in either order, so this
+/// holds whichever slot happens to be on top.
+public enum FieldDissolve {
+    /// - Parameters:
+    ///   - blend: 0 shows the outgoing frame alone, 1 the incoming one.
+    ///   - opacity: the layer's own opacity, 0...1.
+    ///   - fieldAlpha: the field's typical pixel opacity; nil for a plain fade.
+    public static func alphas(blend: Double, opacity: Double,
+                              fieldAlpha: Double?) -> (out: Double, in: Double) {
+        let b = max(0, min(1, blend))
+        let alphaIn = opacity * b
+        guard let o = fieldAlpha, o > 0, o < 1 else { return (opacity * (1 - b), alphaIn) }
+        // Solve 1 − (1 − out·o)(1 − in·o) = opacity·o for `out`.
+        let target = opacity * o
+        let alphaOut = (1 - (1 - target) / (1 - alphaIn * o)) / o
+        return (max(0, min(opacity, alphaOut)), alphaIn)
+    }
 }
 
 /// A field whose tiles are DRAWN HERE rather than fetched as pictures.
@@ -305,9 +341,10 @@ public final class FieldTileStore: @unchecked Sendable {
     private func reserve(bytes: Int) {
         lock.lock(); defer { lock.unlock() }
         let wanted = min(ceilingBytes, max(floorBytes, bytes))
-        if wanted > cache.totalCostLimit {
-            radarLog.info("tile cache limit \(self.cache.totalCostLimit / 1_048_576) → \(wanted / 1_048_576) MB")
-            cache.totalCostLimit = wanted
+        if wanted > limitBytes {
+            radarLog.info("tile cache limit \(self.limitBytes / 1_048_576) → \(wanted / 1_048_576) MB")
+            limitBytes = wanted
+            applyLimit()
         }
         // A LOOP THE CAP CANNOT HOLD, said once per size. The eviction count
         // shows the churn; this is the number that explains it.
@@ -318,6 +355,20 @@ public final class FieldTileStore: @unchecked Sendable {
     }
 
     private var lastOverCap = 0
+
+    /// The whole budget, kept tiles and cached ones together. NSCache is given
+    /// what the kept set leaves, so keeping never adds to the total — which
+    /// matters on Apple TV, where the cap is the line the system kills at.
+    private var limitBytes = FieldTileStore.floorBytes
+
+    /// Never below this, so tiles just off screen and the last pan's still have
+    /// somewhere to sit while the kept set is large.
+    private static let spillBytes = 64 * 1024 * 1024
+
+    /// Call with `lock` held.
+    private func applyLimit() {
+        cache.totalCostLimit = max(Self.spillBytes, limitBytes - keptBytes)
+    }
 
     private var floorBytes = FieldTileStore.floorBytes
     private var ceilingBytes = FieldTileStore.ceilingBytes
@@ -333,7 +384,81 @@ public final class FieldTileStore: @unchecked Sendable {
         lock.lock(); defer { lock.unlock() }
         floorBytes = bytes
         ceilingBytes = bytes
-        cache.totalCostLimit = bytes
+        limitBytes = bytes
+        applyLimit()
+    }
+
+    // MARK: Keeping what is on screen
+
+    /// THE LOOP IN VIEW IS KEPT, NOT CACHED. NSCache empties itself whenever
+    /// macOS reports memory pressure — not just past its limit — and on
+    /// 2026-10-03 that is what blanked the map: KSJT's ten scans had all
+    /// downloaded, so the loop counted as ready and played, but every tile
+    /// was thrown away as it landed (the log showed 2–3 GB evicted every three
+    /// seconds against a 630 MB limit), redrawn on the next paint, and thrown
+    /// away again. Rings, a moving clock, and no weather. Tiles drawn in a few
+    /// milliseconds are cheap to lose one at a time and useless to lose all at
+    /// once, forever.
+    ///
+    /// So the tiles the viewport needs for the loop on screen are held here,
+    /// out of NSCache's reach, up to the same cap the cache already has. The
+    /// cache keeps everything else — other zooms, the last pan, other fields.
+    private var kept: [String: CGImageBox] = [:]
+    private var keptKeys: Set<String> = []
+    private var keptBytes = 0
+
+    /// Keep these tiles, in priority order, and stop keeping any others. Past
+    /// the cap the rest are only cached, and the order decides which those are
+    /// — so pass the coarse pass first and the frame on screen early.
+    public func keep(stamps: [String], passes: [[FieldTileGrid.Tile]], from source: FieldTileSource) {
+        let tileBytes = source.tileSize * source.tileSize * 4
+        var keys: Set<String> = []
+        var budget = 0
+        lock.lock(); defer { lock.unlock() }
+        outer: for tiles in passes {
+            for stamp in stamps {
+                for tile in tiles {
+                    guard budget + tileBytes <= ceilingBytes else { break outer }
+                    let key = Key(source: source.id, stamp: stamp, z: tile.z, x: tile.x, y: tile.y).cacheKey
+                    if keys.insert(key).inserted { budget += tileBytes }
+                }
+            }
+        }
+        setKept(keys)
+    }
+
+    /// Stop keeping anything — the map closed, or shows no tiled field.
+    public func keepNothing() {
+        lock.lock(); defer { lock.unlock() }
+        setKept([])
+    }
+
+    /// Call with `lock` held.
+    private func setKept(_ keys: Set<String>) {
+        guard keys != keptKeys else { return }
+        // Released tiles go back to the cache rather than away: a pan that
+        // comes straight back should find them.
+        for (key, box) in kept where !keys.contains(key) {
+            kept[key] = nil
+            cache.setObject(box, forKey: key as NSString, cost: box.cost)
+        }
+        // Anything already cached that is now wanted is kept too. Left in the
+        // cache rather than removed: the image is shared, and a removal would
+        // be counted as an eviction.
+        for key in keys where kept[key] == nil {
+            if let box = cache.object(forKey: key as NSString) { kept[key] = box }
+        }
+        keptKeys = keys
+        keptBytes = kept.values.reduce(0) { $0 + $1.cost }
+        applyLimit()
+    }
+
+    /// Kept first, then cached.
+    private func box(_ cacheKey: String) -> CGImageBox? {
+        lock.lock()
+        let held = kept[cacheKey]
+        lock.unlock()
+        return held ?? cache.object(forKey: cacheKey as NSString)
     }
 
     private let lock = NSLock()
@@ -415,9 +540,9 @@ public final class FieldTileStore: @unchecked Sendable {
 
     // MARK: Reading
 
-    public func image(for key: Key) -> CGImage? { cache.object(forKey: key.cacheKey as NSString)?.image }
+    public func image(for key: Key) -> CGImage? { box(key.cacheKey)?.image }
 
-    public func has(_ key: Key) -> Bool { cache.object(forKey: key.cacheKey as NSString) != nil }
+    public func has(_ key: Key) -> Bool { box(key.cacheKey) != nil }
 
     // MARK: Watching
 
@@ -450,7 +575,7 @@ public final class FieldTileStore: @unchecked Sendable {
     /// many callers there are and whichever of them asked first.
     public func fetch(_ key: Key, from source: FieldTileSource) {
         let cacheKey = key.cacheKey
-        guard cache.object(forKey: cacheKey as NSString) == nil else { return }
+        guard box(cacheKey) == nil else { return }
 
         lock.lock()
         if let failedAt = failures[cacheKey] {
@@ -508,8 +633,15 @@ public final class FieldTileStore: @unchecked Sendable {
             finish(cacheKey, failed: true)
             return
         }
-        cache.setObject(CGImageBox(image), forKey: cacheKey as NSString,
-                        cost: image.height * image.bytesPerRow)
+        let box = CGImageBox(image)
+        lock.lock()
+        if keptKeys.contains(cacheKey) {
+            if kept.updateValue(box, forKey: cacheKey) == nil { keptBytes += box.cost }
+            applyLimit()
+        } else {
+            cache.setObject(box, forKey: cacheKey as NSString, cost: box.cost)
+        }
+        lock.unlock()
         finish(cacheKey, failed: false)
 
         // Outside the lock: an observer repaints a map, and holding the
@@ -603,7 +735,7 @@ public final class FieldTileStore: @unchecked Sendable {
         var out = Progress(wanted: stamps.count * tiles.count)
         out.frameCount = stamps.count
         lock.lock()
-        let flying = inFlight, failed = failures
+        let flying = inFlight, failed = failures, held = kept
         lock.unlock()
 
         let now = Date()
@@ -612,7 +744,7 @@ public final class FieldTileStore: @unchecked Sendable {
             for tile in tiles {
                 let key = Key(source: source.id, stamp: stamp, z: tile.z, x: tile.x, y: tile.y)
                 let cacheKey = key.cacheKey
-                if cache.object(forKey: cacheKey as NSString) != nil { out.held += 1 }
+                if held[cacheKey] != nil || cache.object(forKey: cacheKey as NSString) != nil { out.held += 1 }
                 else {
                     wholeFrame = false
                     if flying.contains(cacheKey) { out.inFlight += 1 }
@@ -637,7 +769,21 @@ public final class FieldTileStore: @unchecked Sendable {
         lock.lock(); failures.removeAll(); lock.unlock()
     }
 
-    public func removeAll() { cache.removeAllObjects() }
+    public func removeAll() {
+        lock.lock()
+        kept.removeAll(); keptKeys.removeAll(); keptBytes = 0
+        applyLimit()
+        lock.unlock()
+        cache.removeAllObjects()
+    }
+
+    /// What macOS does to the cache under memory pressure, for tests.
+    func purgeCache() { cache.removeAllObjects() }
+
+    /// For diagnostics: tiles thrown away by NSCache in the last few seconds.
+    /// Steady churn while the picture is incomplete is the signature of memory
+    /// pressure emptying the cache, as opposed to tiles that never arrived.
+    public var recentEvictions: Int { evictionWatcher.recent }
 }
 
 final class EvictionWatcher: NSObject, NSCacheDelegate, @unchecked Sendable {
@@ -645,11 +791,22 @@ final class EvictionWatcher: NSObject, NSCacheDelegate, @unchecked Sendable {
     private var count = 0
     private var bytes = 0
     private var lastReport = Date.distantPast
+    private var perSecond: [Int: Int] = [:]
+
+    /// Evictions in the last five seconds.
+    var recent: Int {
+        lock.lock(); defer { lock.unlock() }
+        let now = Int(Date().timeIntervalSince1970)
+        return perSecond.filter { $0.key > now - 5 }.values.reduce(0, +)
+    }
 
     func cache(_ cache: NSCache<AnyObject, AnyObject>, willEvictObject obj: Any) {
         lock.lock()
         count += 1
-        if let box = obj as? CGImageBox { bytes += box.image.height * box.image.bytesPerRow }
+        if let box = obj as? CGImageBox { bytes += box.cost }
+        let second = Int(Date().timeIntervalSince1970)
+        perSecond[second, default: 0] += 1
+        if perSecond.count > 8 { perSecond = perSecond.filter { $0.key > second - 5 } }
         let due = Date().timeIntervalSince(lastReport) > 3
         let (c, b) = (count, bytes)
         if due { lastReport = Date(); count = 0; bytes = 0 }
@@ -664,5 +821,6 @@ final class EvictionWatcher: NSObject, NSCacheDelegate, @unchecked Sendable {
 /// about than relying on the CoreFoundation bridge to behave like one.
 final class CGImageBox {
     let image: CGImage
+    var cost: Int { image.height * image.bytesPerRow }
     init(_ image: CGImage) { self.image = image }
 }

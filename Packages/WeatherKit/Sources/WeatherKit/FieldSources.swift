@@ -96,6 +96,9 @@ public struct SatelliteFieldSource: FieldTileSource {
     /// which z9 still resolves.
     public var zoomRange: ClosedRange<Int> { band == .visible ? 3...9 : 3...7 }
     public var maxPixelScale: Double? { 1 }
+    /// Where the tables draw at all, they draw at 0.8–0.9 — and water vapour
+    /// draws everywhere, so a dissolve that dipped below that showed the map.
+    public var dissolveOpacity: Double? { 0.85 }
 
     public init(band: Band = .infrared) {
         self.band = band
@@ -228,6 +231,144 @@ public struct SatelliteFieldSource: FieldTileSource {
         Stop(160, 245, 245, 245, 0.88),
         Stop(255, 255, 255, 255, 0.92),
     ])
+}
+
+// MARK: - Satellite, read at a point
+
+/// What a band's grey MEANS, in words — for the key under the map and for the
+/// one place on it a person most wants read for them: home.
+///
+/// The grey is the service's own, so these bands line up with the colour
+/// tables above: each band's name starts where its table changes colour.
+public struct SatelliteReading: Equatable, Sendable {
+    public var grey: Int
+    /// "Very dry high up", "Tall storm tops".
+    public var name: String
+    /// What that air is doing — the mechanism, not just the colour.
+    public var meaning: String
+}
+
+extension SatelliteFieldSource.Band {
+
+    /// The words for each stretch of grey, lowest first, starting at `from`.
+    public var readings: [(from: Int, name: String, meaning: String)] {
+        switch self {
+        case .waterVapor:
+            return [
+                (0, "Very dry high up",
+                 "Air sinking from high in the atmosphere, drying as it comes down. It holds the sky clear and keeps storms from building tall. This band doesn't see near the ground, so it can still be humid at the surface."),
+                (45, "Dry high up",
+                 "Drier air aloft. Sinking air is winning here, and high cloud is scarce."),
+                (85, "Some moisture high up",
+                 "The ordinary moist plume of the upper air. High, thin cloud is possible; nothing is being pushed upward hard."),
+                (150, "Deep moisture",
+                 "Moisture lifted high, which means air is rising. Rising air is where clouds and storms form."),
+                (205, "Storm tops",
+                 "Tops of tall storms, cold enough to be near the top of the weather."),
+            ]
+        case .infrared:
+            return [
+                (0, "Clear, or low cloud only",
+                 "Nothing cold overhead. Infrared sees the warm ground, or low cloud too warm to tell apart from it."),
+                (120, "Cloud",
+                 "Cloud tops colder than the ground, at middle heights."),
+                (185, "High, cold cloud",
+                 "Cloud tops high enough to be well below freezing: thick cirrus, or the anvil of a storm."),
+                (208, "Tall storm tops",
+                 "The coldest tops are the tallest storms. The colder, the stronger the updraft holding them up."),
+            ]
+        case .visible:
+            return [
+                (0, "Clear",
+                 "Sunlit ground with no cloud brighter than it."),
+                (110, "Cloud",
+                 "Sunlight reflected off cloud."),
+                (160, "Thick cloud",
+                 "Bright, thick cloud: deep enough to reflect most of the sunlight."),
+            ]
+        }
+    }
+
+    /// The reading for a grey level.
+    public func reading(grey: Int) -> SatelliteReading {
+        let band = readings.last { grey >= $0.from } ?? readings[0]
+        return SatelliteReading(grey: grey, name: band.name, meaning: band.meaning)
+    }
+}
+
+extension SatelliteFieldSource {
+
+    /// The key's colours: the band's table sampled evenly across its greys,
+    /// from 0 to 1. Levels the table drops come back clear, as on the map.
+    public func legendStops(count: Int = 32) -> [(location: Double, r: UInt8, g: UInt8, b: UInt8, alpha: Float)] {
+        let table = Self.table(for: band)
+        return (0..<count).map { i in
+            let location = Double(i) / Double(count - 1)
+            let entry = table[Int((location * 255).rounded())]
+            return (location, entry?.0 ?? 0, entry?.1 ?? 0, entry?.2 ?? 0, entry?.3 ?? 0)
+        }
+    }
+
+    /// A tiny picture of one scan centred on a point — a few pixels about
+    /// two kilometres wide, about the scan's own resolution — so the grey
+    /// at home can be read without a tile's worth of download.
+    public func pointURL(stamp: String, latitude: Double, longitude: Double) -> URL? {
+        let r = 6_378_137.0
+        let x = r * longitude * .pi / 180
+        let y = r * log(tan(.pi / 4 + latitude * .pi / 360))
+        let half = 3_000.0
+        var components = URLComponents(string: Self.wms)
+        components?.queryItems = [
+            .init(name: "service", value: "WMS"),
+            .init(name: "version", value: "1.1.1"),
+            .init(name: "request", value: "GetMap"),
+            .init(name: "layers", value: band.layer),
+            .init(name: "styles", value: ""),
+            .init(name: "srs", value: "EPSG:3857"),
+            .init(name: "bbox", value: [x - half, y - half, x + half, y + half]
+                .map { String(format: "%.1f", $0) }.joined(separator: ",")),
+            .init(name: "width", value: "3"),
+            .init(name: "height", value: "3"),
+            .init(name: "format", value: "image/png"),
+            .init(name: "transparent", value: "true"),
+            .init(name: "time", value: stamp),
+        ]
+        return components?.url
+    }
+
+    /// The grey at the middle of a picture from `pointURL`; nil where the
+    /// scan has nothing (transparent) or the picture won't decode.
+    public static func centreGrey(_ data: Data) -> Int? {
+        guard let source = CGImageSourceCreateWithData(data as CFData, nil),
+              let image = CGImageSourceCreateImageAtIndex(source, 0, nil),
+              image.width > 0, image.height > 0 else { return nil }
+        // Drawn into a one-pixel buffer we define, offset so the image's
+        // middle pixel is the one that lands in it.
+        var pixel = [UInt8](repeating: 0, count: 4)
+        let drawn: Bool = pixel.withUnsafeMutableBytes { buffer in
+            guard let context = CGContext(data: buffer.baseAddress, width: 1, height: 1,
+                                          bitsPerComponent: 8, bytesPerRow: 4,
+                                          space: CGColorSpaceCreateDeviceRGB(),
+                                          bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)
+            else { return false }
+            context.interpolationQuality = .none
+            context.draw(image, in: CGRect(x: -(image.width / 2), y: -(image.height / 2),
+                                           width: image.width, height: image.height))
+            return true
+        }
+        let alpha = pixel[3]
+        guard drawn, alpha > 0 else { return nil }
+        return min(255, Int(pixel[0]) * 255 / Int(alpha))
+    }
+
+    /// The grey at a point in one scan. One request of a few hundred bytes.
+    public func grey(stamp: String, latitude: Double, longitude: Double) async -> Int? {
+        guard let url = pointURL(stamp: stamp, latitude: latitude, longitude: longitude),
+              let (data, response) = try? await URLSession.shared.data(from: url),
+              (response as? HTTPURLResponse).map({ (200..<300).contains($0.statusCode) }) ?? true
+        else { return nil }
+        return Self.centreGrey(data)
+    }
 }
 
 // MARK: - Satellite scans

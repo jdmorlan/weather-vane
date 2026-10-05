@@ -43,6 +43,13 @@
 //  prefetch a coarse first pass, so within about a second EVERY frame has a soft
 //  complete picture and the loop can start moving while the sharp tiles arrive.
 //
+//  BUT NOT TILE BY TILE WHILE IT PLAYS. Falling back per tile meant each frame
+//  was a different patchwork of sharp squares and coarse ones, and looped, the
+//  eye read the squares changing instead of the weather moving. So a loop is
+//  drawn at ONE level for every frame — `levelsUp` — coarse until every frame
+//  is sharp, then sharp all at once. The per-tile fallback is left for the odd
+//  tile that never comes.
+//
 
 import Foundation
 import MapKit
@@ -98,6 +105,12 @@ final class FieldRenderer: MKOverlayRenderer {
         /// A scan being swept in: `stampB` inside the wedge the line has passed
         /// since `revealFrom`, `stampA` outside it. Nil between reveals.
         var reveal: Reveal?
+        /// Draw every frame this many zoom levels coarser than the screen
+        /// wants. The loop's tiles all arrive at the coarse level first; drawing
+        /// from it until the sharp level is complete for EVERY frame keeps the
+        /// frames alike, so the loop shows the weather moving rather than the
+        /// tiles changing. 0 is sharp.
+        var levelsUp: Int = 0
     }
 
     /// The wedge a scan has been swept into so far.
@@ -131,6 +144,8 @@ final class FieldRenderer: MKOverlayRenderer {
     private var stamp = ""
     /// Nil draws everywhere; set only while a sweep replay is running.
     private var clip: Clip?
+    /// See `Playhead.levelsUp`.
+    private var levelsUp = 0
 
     /// Backing scale of the screen the map is on. Set by the canvas; it buys one
     /// zoom level, which is the difference between a crisp field and a soft one
@@ -185,6 +200,21 @@ final class FieldRenderer: MKOverlayRenderer {
         return changed
     }
 
+    /// Draw this many levels coarse. True when it changed, so the caller can
+    /// repaint.
+    @discardableResult
+    func set(levelsUp: Int) -> Bool {
+        lock.lock()
+        let changed = self.levelsUp != levelsUp
+        if changed { self.levelsUp = levelsUp }
+        lock.unlock()
+        return changed
+    }
+
+    /// The scan this renderer is drawing, so the canvas can hand the next
+    /// frame to the slot that doesn't already hold the one on screen.
+    var shownStamp: String { currentStamp }
+
     /// Set the wedge this slot is confined to. The caller invalidates exactly the
     /// region that changed — redrawing the whole viewport every refresh is what
     /// this renderer's history warns against.
@@ -202,6 +232,11 @@ final class FieldRenderer: MKOverlayRenderer {
         return stamp
     }
 
+    private var currentLevelsUp: Int {
+        lock.lock(); defer { lock.unlock() }
+        return levelsUp
+    }
+
     // MARK: Drawing
 
     override func draw(_ mapRect: MKMapRect, zoomScale: MKZoomScale, in context: CGContext) {
@@ -213,17 +248,25 @@ final class FieldRenderer: MKOverlayRenderer {
                                    scale: min(tileScale, source.maxPixelScale ?? tileScale),
                                    clampedTo: source.zoomRange)
 
-        let placements = FieldTileGrid.placements(inRectX: mapRect.origin.x, y: mapRect.origin.y,
-                                                  width: mapRect.size.width,
-                                                  height: mapRect.size.height,
-                                                  z: z)
-        guard !placements.isEmpty else { return }
+        let wanted = FieldTileGrid.placements(inRectX: mapRect.origin.x, y: mapRect.origin.y,
+                                              width: mapRect.size.width,
+                                              height: mapRect.size.height,
+                                              z: z)
+        guard !wanted.isEmpty else { return }
 
-        // Tell whoever is prefetching what this viewport needs. Cheap, and it is
-        // the only place in the app that knows.
+        // Tell whoever is prefetching what this viewport needs — at the SHARP
+        // level, whatever is being drawn. Cheap, and it is the only place in
+        // the app that knows.
         var seen = Set<FieldTileGrid.Tile>()
-        let distinct = placements.compactMap { seen.insert($0.tile).inserted ? $0.tile : nil }
+        let distinct = wanted.compactMap { seen.insert($0.tile).inserted ? $0.tile : nil }
         onVisibleTiles?(distinct, z)
+
+        // What is drawn: the same ground, coarser while the loop sharpens.
+        let drawZ = max(source.zoomRange.lowerBound, z - currentLevelsUp)
+        let placements = drawZ == z ? wanted
+            : FieldTileGrid.placements(inRectX: mapRect.origin.x, y: mapRect.origin.y,
+                                       width: mapRect.size.width, height: mapRect.size.height,
+                                       z: drawZ)
 
         // NO PER-PIXEL ALPHA HERE. The crossfade is the renderer's `alpha`, which
         // MapKit applies when it composites this overlay over the map — so a frame

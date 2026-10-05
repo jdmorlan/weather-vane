@@ -210,8 +210,9 @@ struct ForecastPairView: View {
             }
         }
         .chartYScale(domain: domain)
+        .chartXScale(domain: window.from...window.through)
         .chartXAxis {
-            AxisMarks(values: .stride(by: .day, count: max(1, checks.count / 6))) { value in
+            AxisMarks(values: .stride(by: .day, count: max(1, window.days / 6))) { value in
                 AxisTick().foregroundStyle(Color.primary.opacity(0.15))
                 AxisValueLabel {
                     if let d = value.as(Date.self) {
@@ -229,6 +230,30 @@ struct ForecastPairView: View {
         .chartXSelection(value: $hover)
         .frame(height: 200)
     }
+
+    /// THE WHOLE STRETCH, NOT JUST THE DAYS GRADED SO FAR — as Compare draws a
+    /// stretch with days still to come. Fitted to the checks alone, two graded
+    /// days were two huge marks at either end of the card; on a fixed month
+    /// they are two days at the start of one, and each new day lands in its
+    /// own place instead of rescaling the rest.
+    ///
+    /// A month from the first day kept, until there is more than a month to
+    /// show; then the whole record.
+    private var window: (from: Date, through: Date, days: Int) {
+        let first = [loggedSince, checks.map(\.day).min()].compactMap { $0 }.min()
+        let last = checks.map(\.day).max()
+        guard let first, let start = DayKey.date(from: first, timeZone: timezone) else {
+            return (.now, .now, 1)
+        }
+        let minimumEnd = DayKey.step(first, by: Self.windowDays - 1) ?? first
+        let endKey = max(minimumEnd, last ?? minimumEnd)
+        // Through the END of the last day, so its mark sits inside the chart.
+        let end = DayKey.step(endKey, by: 1).flatMap { DayKey.date(from: $0, timeZone: timezone) } ?? start
+        let days = max(1, Int((end.timeIntervalSince(start) / 86_400).rounded()))
+        return (start, end, days)
+    }
+
+    private static let windowDays = 30
 
     private var domain: ClosedRange<Double> {
         let values = checks.flatMap { [$0.forecast, $0.actual] }

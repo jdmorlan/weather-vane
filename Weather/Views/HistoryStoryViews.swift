@@ -48,10 +48,25 @@ struct StoryCards: View {
         return story.days.first { $0.day == key }
     }
 
+    /// The WHOLE stretch, not just the days so far: on Oct 4 a month's cards
+    /// are still a month wide, three bars and twenty-eight empty days. Three
+    /// bars stretched across the card read as a scale, not a week in.
     private var domain: ClosedRange<Date> {
         let first = date(story.days.first?.day ?? "")
-        let last = date(story.days.last?.day ?? "").addingTimeInterval(86_400)
+        let last = date(max(story.lastDay, story.days.last?.day ?? "")).addingTimeInterval(86_400)
         return first...max(last, first.addingTimeInterval(86_400))
+    }
+
+    /// Every calendar day the cards span, held or not.
+    private var calendarDays: [String] {
+        guard var key = story.days.first?.day else { return [] }
+        var keys: [String] = []
+        while key <= story.lastDay || key <= (story.days.last?.day ?? key) {
+            keys.append(key)
+            guard let next = DayKey.step(key, by: 1) else { break }
+            key = next
+        }
+        return keys
     }
 
     var body: some View {
@@ -207,7 +222,7 @@ struct StoryCards: View {
                 .foregroundStyle(Color.primary.opacity(0.4))
                 .lineStyle(StrokeStyle(lineWidth: 1.25, dash: [3, 2]))
                 .annotation(position: .top, spacing: 2) {
-                    if labelled && story.days.count <= 62 {
+                    if labelled && calendarDays.count <= 62 {
                         Text("front").font(.caption2.weight(.medium)).foregroundStyle(.secondary)
                     }
                 }
@@ -233,12 +248,13 @@ struct StoryCards: View {
 
     /// About six labels; month starts when the stretch is long enough to have them.
     private var axisDays: [Date] {
-        if story.days.count > 62 {
-            return story.days.filter { $0.day.hasSuffix("-01") }.map { date($0.day) }
+        let days = calendarDays
+        if days.count > 62 {
+            return days.filter { $0.hasSuffix("-01") }.map(date)
         }
-        let step = max(1, story.days.count / 6)
+        let step = max(1, days.count / 6)
         // Stop short of the last couple of days, whose label would run off the edge.
-        return stride(from: 0, to: max(1, story.days.count - 2), by: step).map { date(story.days[$0].day) }
+        return stride(from: 0, to: max(1, days.count - 2), by: step).map { date(days[$0]) }
     }
 
     /// The hovered day, read in this card's measure — and the way into its hours.

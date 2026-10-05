@@ -156,6 +156,14 @@ public struct DayNote: Equatable, Sendable, Identifiable {
     public var weekday: String            // "Sat"
     public var high: Double?
     public var low: Double?
+    /// The temperature at `WeatherInterpreter.wakeHour`, from the hourly forecast.
+    ///
+    /// The low alone can't say WHEN: a 48° low is a normal dawn on one day and
+    /// a front arriving at 11 PM on another. Beside the low, this separates
+    /// them — if they match, the low is the morning; if the low is well under
+    /// it, the cold comes later. Nil when the hourly forecast doesn't reach the
+    /// day, or the hour has already passed today.
+    public var wakeTemp: Double?
     public var conditions: String
     public var icon: String
     public var precipProbability: Double?
@@ -185,7 +193,31 @@ public struct DayNote: Equatable, Sendable, Identifiable {
     /// day holds steady or we have no parts.
     public var shape: String
     public var headline: String           // "Rain likely — bring a jacket"
+    /// The day's hours, for the small curve in its box. Today holds only what's
+    /// left of it; empty where the hourly forecast doesn't reach.
+    public var hours: [DayHour] = []
     public var id: Int { epoch }
+
+    /// The hour of the day's coldest reading when it comes AFTER the morning —
+    /// a front arriving in the evening — rather than at dawn. Nil on the usual
+    /// day, so the box marks only the day it matters: a late low needs to be
+    /// at least 3° under the 7 AM reading and after noon.
+    public var lateLowHour: Int? {
+        guard let wake = wakeTemp,
+              let coldest = hours.filter({ $0.temperature != nil })
+                  .min(by: { $0.temperature! < $1.temperature! }),
+              let t = coldest.temperature,
+              coldest.hour >= 12, wake - t >= 3 else { return nil }
+        return coldest.hour
+    }
+}
+
+/// One hour of a day's forecast, at its local clock hour.
+public struct DayHour: Equatable, Sendable {
+    public var hour: Int                  // local clock hour 0–23
+    public var temperature: Double?
+    public var precipProbability: Double?
+    public var precip: Double?
 }
 
 // MARK: - Interpreter
@@ -584,8 +616,10 @@ public enum WeatherInterpreter {
         let precipTotal: Double? = hours.isEmpty
             ? nil : hours.compactMap(\.precip).reduce(0, +)
 
+        let wakeTemp = hours.first { $0.localHour == wakeHour }?.airTemperature
+
         return DayNote(epoch: epoch, weekday: weekday,
-                       high: d.airTempHigh, low: d.airTempLow,
+                       high: d.airTempHigh, low: d.airTempLow, wakeTemp: wakeTemp,
                        conditions: d.conditions ?? "—", icon: d.icon ?? "cloudy",
                        precipProbability: d.precipProbability,
                        precipTotal: precipTotal,
@@ -594,8 +628,17 @@ public enum WeatherInterpreter {
                        comfortTag: daytimeDews.max().map { dewComfortTag($0) } ?? "",
                        dewPointHigh: allDews.max(), dewPointLow: allDews.min(),
                        parts: parts, shape: dayShape(parts),
-                       headline: headline)
+                       headline: headline,
+                       hours: hours.compactMap { h in
+                           h.localHour.map {
+                               DayHour(hour: $0, temperature: h.airTemperature,
+                                       precipProbability: h.precipProbability, precip: h.precip)
+                           }
+                       })
     }
+
+    /// The local hour a day box reads its "when you wake up" temperature at.
+    public static let wakeHour = 7
 
     // MARK: Day parts (the fidelity the daily verdict throws away)
 
@@ -678,7 +721,7 @@ public enum WeatherInterpreter {
 
     /// "Are all the days going to be oppressive?" — a read on humidity across the week,
     /// written in terms of when in the day the mugginess actually lands.
-    static func weekComfortSummary(_ days: [DayNote]) -> String? {
+    public static func weekComfortSummary(_ days: [DayNote]) -> String? {
         let dews = days.compactMap(\.dewPoint)
         guard dews.count >= 3 else { return nil }
         let oppressive = dews.filter { $0 >= 70 }.count       // sweaty, tropical

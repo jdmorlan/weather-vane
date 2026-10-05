@@ -447,7 +447,18 @@ struct MapCanvas: MapViewRepresentable {
         /// composites rather than by asking it to draw again.
         func apply(_ head: FieldRenderer.Playhead, to layerID: String) {
             guard let slots = fieldRenderers[layerID],
-                  let out = slots[0], let incoming = slots[1] else { return }
+                  let first = slots[0], let second = slots[1] else { return }
+            // THE FRAME ON SCREEN STAYS WHERE IT IS DRAWN. When the loop moves
+            // on, the scan that was dissolving in becomes the one dissolving
+            // out — and it is already rasterised in its slot. Fixed roles made
+            // the out slot redraw that same scan at full strength at every
+            // advance, piece by piece, which showed as squares of bare map.
+            // Swapped, the only redraw is the new frame, at 1%.
+            let (out, incoming) = !head.stampA.isEmpty && second.shownStamp == head.stampA
+                ? (second, first) : (first, second)
+            let coarser = [out.set(levelsUp: head.levelsUp), incoming.set(levelsUp: head.levelsUp)]
+            if coarser[0] { out.setNeedsDisplay() }
+            if coarser[1] { incoming.setNeedsDisplay() }
 
             updateTrail(head)
             if let site = head.sweep {
@@ -475,8 +486,11 @@ struct MapCanvas: MapViewRepresentable {
             // hitch is most visible. Kept barely on, it is already drawn when the
             // fade starts. At 1% over a map it is not a picture anyone can see.
             let held = 0.01
-            let alphaOut = head.opacity * (isStill ? 1 : 1 - head.blend)
-            let alphaIn = isStill ? 0 : max(head.opacity * head.blend, held)
+            // Out fades only as fast as in covers for it — see `FieldDissolve`.
+            let fade = FieldDissolve.alphas(blend: head.blend, opacity: head.opacity,
+                                            fieldAlpha: out.source.dissolveOpacity)
+            let alphaOut = isStill ? head.opacity : fade.out
+            let alphaIn = isStill ? 0 : max(fade.in, held)
             if abs(Double(out.alpha) - alphaOut) > 0.002 { out.alpha = CGFloat(alphaOut) }
             if abs(Double(incoming.alpha) - alphaIn) > 0.002 { incoming.alpha = CGFloat(alphaIn) }
         }

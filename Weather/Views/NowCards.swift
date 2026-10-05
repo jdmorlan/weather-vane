@@ -578,15 +578,20 @@ struct TenDayCard<Header: View>: View {
     @ViewBuilder var header: Header
 
     var body: some View {
-        StationCard(label: "10-day forecast") {
+        // TODAY IS LEFT OUT: the Today card sits right above this one on both
+        // Nows, and a box for it said the same day twice.
+        let ahead = Array(report.days.dropFirst())
+        return StationCard(label: "Next \(ahead.count) days") {
             VStack(alignment: .leading, spacing: 14) {
                 header
-                if let week = report.weekComfort {
+                // Over the same days as the boxes, so "muggy on 3 of the next
+                // 9" counts what's drawn under it.
+                if let week = WeatherInterpreter.weekComfortSummary(ahead) {
                     Text(week).font(.callout).foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                DayColumns(days: report.days, timezone: report.timezone)
-                Text("Bars: each day's low to high, on one scale for all ten days. Rain: the chance, and the amount where the hourly forecast reaches.")
+                DayColumns(days: ahead, timezone: report.timezone, firstIsToday: false)
+                Text(DayColumns.key)
                     .font(.caption2).foregroundStyle(.tertiary)
                     .fixedSize(horizontal: false, vertical: true)
             }
