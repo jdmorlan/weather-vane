@@ -38,7 +38,9 @@
 //  come back.
 //
 //  The camera never moves on its own: there is no pointer to pan with, and a
-//  remote's swipe belongs to the focus engine.
+//  remote's swipe belongs to the focus engine. It moves when you pick a radar
+//  site — to the site, at the regional zoom, as on the Mac — and goes back to
+//  home when you pick "Nearest to home" or leave the radar for an outlook.
 //
 
 import SwiftUI
@@ -130,6 +132,8 @@ struct MapBackdrop: View {
     @ObservedObject var totals: TVRainTotalsModel
     @ObservedObject var lines: TVBoundaries
     let home: CLLocationCoordinate2D?
+    /// Where the map is centred: home, or a radar site once one is picked.
+    let center: CLLocationCoordinate2D?
     let range: TVMapZoom
     let layer: TVMapLayer
     let day: Int
@@ -139,7 +143,7 @@ struct MapBackdrop: View {
     var body: some View {
         if let home {
             ZStack {
-                TVRadarMap(center: home,
+                TVRadarMap(center: center ?? home,
                            radiusMeters: range.radius,
                            radar: radar, hazards: hazards.drawable,
                            coverage: layer == .radar ? radar.coverage : nil,
@@ -147,11 +151,9 @@ struct MapBackdrop: View {
                            showsRadar: layer == .radar,
                            outlook: layer == .rainTotals ? totals.totals[day]
                                                          : storms.outlook(for: layer, day: day),
-                           counties: lines.counties, stateOutline: lines.outline)
+                           counties: lines.counties, stateOutline: lines.outline,
+                           home: home)
                     .focusable(false)
-                Circle().stroke(.white, lineWidth: 5).frame(width: 34, height: 34)
-                    .shadow(color: .black.opacity(0.7), radius: 5)
-                    .overlay { Circle().fill(.white).frame(width: 10, height: 10) }
             }
             .opacity(isActive ? 1 : 0)
             .ignoresSafeArea()

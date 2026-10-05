@@ -66,6 +66,16 @@ struct StormSurface: View {
     /// WHICH RADAR, stored as the Mac stores it: "auto" for the site nearest
     /// home, or an ICAO. Per device, not synced.
     @AppStorage("radarSite") private var radarSiteChoice: String = "auto"
+    /// The site the map was last centred on by picking it. Nil centres on
+    /// home: at launch, and after "Nearest to home".
+    @State private var focusSite: RadarSite?
+
+    /// The radar map centres on a picked site; the outlooks are about home,
+    /// so they always centre there.
+    private var mapCenter: CLLocationCoordinate2D? {
+        guard layer == .radar, let site = focusSite else { return settings.homeCoordinate }
+        return CLLocationCoordinate2D(latitude: site.latitude, longitude: site.longitude)
+    }
 
     /// Anything that is not a known site means the one nearest home.
     private var resolvedSite: RadarSite? {
@@ -104,7 +114,7 @@ struct StormSurface: View {
         // measurement that put it here.
         .background {
             MapBackdrop(radar: radar, hazards: hazards, storms: storms, totals: rainTotals, lines: lines,
-                        home: settings.homeCoordinate, range: range,
+                        home: settings.homeCoordinate, center: mapCenter, range: range,
                         layer: layer, day: outlookDay,
                         isActive: tab == .map)
         }
@@ -127,7 +137,18 @@ struct StormSurface: View {
         // The radar nearest home unless another was chosen on the Map tab.
         .onAppear { radar.site = resolvedSite }
         .onChange(of: settings.homeLat) { _, _ in radar.site = resolvedSite }
-        .onChange(of: radarSiteChoice) { _, _ in radar.site = resolvedSite }
+        .onChange(of: radarSiteChoice) { _, choice in
+            radar.site = resolvedSite
+            // Picking a radar is asking to see what it sees: centre on the
+            // site, wide enough for the ground it covers well, as the Mac
+            // does. "Nearest to home" is the way back to home.
+            if choice == "auto" {
+                focusSite = nil
+            } else {
+                focusSite = resolvedSite
+                range = .regional
+            }
+        }
         .onAppear { driver.start(radar); driver.pause(tab != .map) }
         .onChange(of: tab) { _, tab in
             if tab == .map { layer = .radar }

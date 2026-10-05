@@ -106,6 +106,10 @@ struct TVRadarMap: UIViewRepresentable {
     /// The home state's counties and its edge, over every view.
     var counties: BoundarySet? = nil
     var stateOutline: BoundarySet? = nil
+    /// Home, marked ON THE MAP rather than at the middle of the screen — the
+    /// map centres on a radar site once one is picked, and home is wherever
+    /// it is then.
+    var home: CLLocationCoordinate2D? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(radar: radar) }
 
@@ -190,6 +194,13 @@ struct TVRadarMap: UIViewRepresentable {
             c.installedCoverage = coverage
         }
 
+        // --- Home ---
+        if c.installedHome?.latitude != home?.latitude || c.installedHome?.longitude != home?.longitude {
+            map.removeAnnotations(map.annotations.compactMap { $0 as? TVHomeMark })
+            if let home { map.addAnnotation(TVHomeMark(coordinate: home)) }
+            c.installedHome = home
+        }
+
         // --- Counties and the state's edge ---
         let lineIDs = [counties?.id, stateOutline?.id].compactMap { $0 }
         if c.installedLines != lineIDs {
@@ -238,6 +249,7 @@ struct TVRadarMap: UIViewRepresentable {
         var installedCoverage: RadarCoverage?
         var installedOutlook: String?
         var installedLines: [String] = []
+        var installedHome: CLLocationCoordinate2D?
         /// While false the radar's overlays are off the map. See the header.
         var showsRadar = true
 
@@ -434,6 +446,20 @@ struct TVRadarMap: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
+            if let home = annotation as? TVHomeMark {
+                // The reticle that used to sit fixed at the screen's middle.
+                let view = MKAnnotationView(annotation: home, reuseIdentifier: nil)
+                let renderer = ImageRenderer(content:
+                    Circle().stroke(.white, lineWidth: 5).frame(width: 34, height: 34)
+                        .overlay { Circle().fill(.white).frame(width: 10, height: 10) }
+                        .padding(10)
+                        .shadow(color: .black.opacity(0.7), radius: 5))
+                renderer.scale = UITraitCollection.current.displayScale
+                view.image = renderer.uiImage
+                view.displayPriority = .required
+                view.zPriority = .max
+                return view
+            }
             guard let label = annotation as? TVCoverageLabel else { return nil }
             let view = MKAnnotationView(annotation: label, reuseIdentifier: nil)
             let renderer = ImageRenderer(content:
@@ -460,6 +486,11 @@ final class TVCoverageLabel: NSObject, MKAnnotation {
     init(text: String, coordinate: CLLocationCoordinate2D) {
         self.text = text; self.coordinate = coordinate
     }
+}
+
+final class TVHomeMark: NSObject, MKAnnotation {
+    let coordinate: CLLocationCoordinate2D
+    init(coordinate: CLLocationCoordinate2D) { self.coordinate = coordinate }
 }
 
 final class TVHazardPolygon: MKPolygon {
