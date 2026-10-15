@@ -146,6 +146,37 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    /// The destination's name in a link: `vane://forecast-check`. Its own list
+    /// rather than the raw value, which is a sidebar label with spaces in it
+    /// ("Forecast Check") and an abbreviation ("SCW") — and a link written into
+    /// a script or a blog post should not break when a label is reworded.
+    var slug: String {
+        switch self {
+        case .now:     return "now"
+        case .forecast: return "forecast"
+        case .map:     return "map"
+        case .rhythms: return "rhythms"
+        case .rain:    return "rain"
+        case .compare: return "compare"
+        case .history: return "history"
+        case .forecastCheck: return "forecast-check"
+        case .wind:    return "wind"
+        case .explore: return "explore"
+        case .pattern: return "pattern"
+        case .videos:  return "videos"
+        case .blog:    return "blog"
+        case .station: return "station"
+        }
+    }
+
+    /// `vane://rain` → `.rain`. The scheme is not checked: the system only
+    /// delivers this app's own, and Debug's differs (see VANE_URL_SCHEME).
+    init?(url: URL) {
+        guard let host = url.host()?.lowercased(),
+              let match = Self.allCases.first(where: { $0.slug == host }) else { return nil }
+        self = match
+    }
+
     enum Group: String, CaseIterable, Identifiable {
         case today = "Today"
         case climate = "Climate"

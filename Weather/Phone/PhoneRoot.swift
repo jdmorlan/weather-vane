@@ -73,6 +73,9 @@ struct PhoneRoot: View {
 
     @State private var showingSetup = false
     @State private var showingSettings = false
+    /// Which tab, held so a link can choose it. Only `.now`, `.map` and
+    /// `.rain` have tabs here; a link to anything else is ignored.
+    @State private var tab: Destination = .now
 
     /// Five minutes while the app is on screen, the same cadence as the hazard
     /// poll it now carries. The station reports every minute, but the forecast
@@ -81,8 +84,8 @@ struct PhoneRoot: View {
     private static let refreshInterval: Duration = .seconds(300)
 
     var body: some View {
-        TabView {
-            Tab(Destination.now.rawValue, systemImage: Destination.now.symbol) {
+        TabView(selection: $tab) {
+            Tab(Destination.now.rawValue, systemImage: Destination.now.symbol, value: .now) {
                 NavigationStack {
                     PhoneNowView(weather: models.weather, today: models.today,
                                  hazards: models.hazards, storms: models.storms,
@@ -101,19 +104,23 @@ struct PhoneRoot: View {
                 .toolbar(isLandscape ? .hidden : .visible, for: .tabBar)
                 .statusBarHidden(isLandscape)
             }
-            Tab(Destination.map.rawValue, systemImage: Destination.map.symbol) {
+            Tab(Destination.map.rawValue, systemImage: Destination.map.symbol, value: .map) {
                 MapSurfaceView()
             }
             // Today's rain and your own gauge — the one thing the phone writes
             // rather than reads. See `PhoneRainView` for why it isn't the
             // iPad's archive-built Rain page.
-            Tab(Destination.rain.rawValue, systemImage: Destination.rain.symbol) {
+            Tab(Destination.rain.rawValue, systemImage: Destination.rain.symbol, value: .rain) {
                 NavigationStack {
                     PhoneRainView(weather: models.weather, today: models.today,
                                   refresh: { await models.refresh(settings: settings) })
                         .toolbar { settingsButton }
                 }
             }
+        }
+        // `vane://map` and the rest; see `Destination(url:)`.
+        .onOpenURL { url in
+            if let d = Destination(url: url), [.now, .map, .rain].contains(d) { tab = d }
         }
         .sheet(isPresented: $showingSetup) {
             SetupSheet { Task { await models.refresh(settings: settings) } }

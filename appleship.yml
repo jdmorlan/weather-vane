@@ -6,3 +6,21 @@ mac:
   needs:
     - network
   decided: "2026-09-30"
+# The screens `appleship screenshots` visits, by link name (vane://<name>), in
+# the sidebar's order. The live ones fetch when they appear, so they wait longer.
+screenshots:
+  mac:
+    - now: 5s
+    - forecast: 5s
+    - map: 8s
+    - rhythms
+    - rain
+    - wind
+    - compare
+    - history
+    - forecast-check
+    - explore
+    - pattern: 8s
+    - videos: 8s
+    - blog: 8s
+    - station

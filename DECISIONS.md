@@ -18,3 +18,19 @@ It also meant the Mac could take the iOS bundle id, jdmorlan.vane.ios, and join
 the one listing. See Weather.entitlements.
 
 Decided by `appleship decide mac`. If what the app does changes, run it again.
+
+## 2. Each destination has a link, and Debug has its own scheme
+
+`vane://now`, `vane://rain`, `vane://forecast-check` and the rest open that
+destination on every platform that has it; each app ignores links to screens it
+does not have (the iPhone has Now, Map and Rain; the TV Now, Forecast, Map and
+Videos). Added so `appleship screenshots` can visit each screen and
+photograph it for a README or a post, without a UI-test target; the screens it
+visits are listed in appleship.yml.
+
+The names are their own list (`Destination.slug`), not the sidebar labels, so
+rewording a label does not break a link written somewhere else.
+
+Debug answers to `vane-dev://` instead. Vane and Vane Dev are installed side
+by side, and when two apps claim one scheme the system picks which one opens
+the link.

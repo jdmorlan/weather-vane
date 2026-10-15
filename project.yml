@@ -7,6 +7,19 @@ options:
     iOS: "26.0"
   createIntermediateGroups: true
 
+# THE URL SCHEME, ONE PER CONFIGURATION. `vane://now`, `vane://rain` and so on
+# open a destination — the way a script reaches each screen to photograph it,
+# and the way anything else (Shortcuts, a widget) would ask for one. Debug is
+# `vane-dev` for the reason Debug is a separate app: Vane and Vane Dev sit side
+# by side on the Mac, and two apps claiming one scheme leaves the system to pick
+# which opens the link. Read by Weather/Info.plist; parsed by `Destination(url:)`.
+settings:
+  base:
+    VANE_URL_SCHEME: vane
+  configs:
+    Debug:
+      VANE_URL_SCHEME: vane-dev
+
 packages:
   WeatherKit:
     path: Packages/WeatherKit
@@ -51,6 +64,9 @@ targets:
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.weather
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         GENERATE_INFOPLIST_FILE: YES
+        # Merged with the generated one; holds the URL scheme, which no
+        # INFOPLIST_KEY_ setting can declare.
+        INFOPLIST_FILE: Weather/Info.plist
         MARKETING_VERSION: "0.1"
         # Answered in the build so App Store Connect stops asking on every
         # upload. Vane's only cryptography is HTTPS to WeatherFlow, the NWS and
@@ -116,6 +132,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: Weather/VaneiOS.entitlements
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
+        # Merged with the generated one; holds the URL scheme, which no
+        # INFOPLIST_KEY_ setting can declare.
+        INFOPLIST_FILE: Weather/Info.plist
         INFOPLIST_KEY_CFBundleDisplayName: Vane
         INFOPLIST_KEY_LSApplicationCategoryType: public.app-category.weather
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -209,6 +228,9 @@ targets:
         CODE_SIGN_ENTITLEMENTS: VaneTV/VaneTV.entitlements
         SWIFT_VERSION: "5.0"
         GENERATE_INFOPLIST_FILE: YES
+        # Merged with the generated one; holds the URL scheme, which no
+        # INFOPLIST_KEY_ setting can declare.
+        INFOPLIST_FILE: Weather/Info.plist
         ASSETCATALOG_COMPILER_APPICON_NAME: "App Icon & Top Shelf Image"
         MARKETING_VERSION: "0.1"
         # Answered in the build so App Store Connect stops asking on every

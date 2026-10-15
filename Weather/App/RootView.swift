@@ -64,6 +64,14 @@ struct RootView: View {
             #endif
                 .toolbar { toolbar }
         }
+        // `vane://rain` and the rest. See `Destination(url:)`.
+        .onOpenURL { url in
+            if let d = Destination(url: url) { destination = d }
+        }
+        // ON THE MAC, A LINK OPENS A NEW WINDOW unless an open one claims it —
+        // SwiftUI treats it as an external event for the WindowGroup. Claimed
+        // here, the window you have moves instead of a second one appearing.
+        .handlesExternalEvents(preferring: ["*"], allowing: ["*"])
         // Over the whole split view, not the detail column, so the video keeps
         // playing as you move between destinations — the radar, typically.
         .overlay { FloatingPlayer(playback: playback) }

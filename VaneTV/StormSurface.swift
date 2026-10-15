@@ -39,7 +39,22 @@
 import SwiftUI
 import WeatherKit
 
-enum TVTab: Hashable { case now, forecast, map, videos }
+enum TVTab: Hashable {
+    case now, forecast, map, videos
+
+    /// `vane://map` → `.map`. The same names as the Mac's links (see
+    /// `Destination.slug`), so one list of links works on every platform and
+    /// each app ignores the ones it has no screen for.
+    init?(url: URL) {
+        switch url.host()?.lowercased() {
+        case "now":      self = .now
+        case "forecast": self = .forecast
+        case "map":      self = .map
+        case "videos":   self = .videos
+        default:         return nil
+        }
+    }
+}
 
 struct StormSurface: View {
     @EnvironmentObject private var settings: TVSettings
@@ -109,6 +124,9 @@ struct StormSurface: View {
                 VideosTab(model: forecasters)
                     .background(Color.black)
             }
+        }
+        .onOpenURL { url in
+            if let t = TVTab(url: url) { tab = t }
         }
         // Behind the tabs, always mounted. See `MapTab.swift` for the
         // measurement that put it here.
