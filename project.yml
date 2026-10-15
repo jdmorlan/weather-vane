@@ -206,6 +206,10 @@ targets:
       # The forecasters' feeds and live check. The list is drawn by the TV's
       # own `VideosTab`; only the model is shared.
       - Weather/Views/ForecasterModel.swift
+      # The Front view's map and its data. The TV has its own menus and card
+      # (`TVFront`); the colours, arrows and numbers are the Mac's.
+      - Weather/Views/FrontPicture.swift
+      - Weather/Views/FrontModel.swift
     dependencies:
       - package: WeatherKit
     settings:

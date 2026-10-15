@@ -110,6 +110,8 @@ struct TVRadarMap: UIViewRepresentable {
     /// map centres on a radar site once one is picked, and home is wherever
     /// it is then.
     var home: CLLocationCoordinate2D? = nil
+    /// The Front view's hour, when that's the view. See `FrontPicture`.
+    var front: FrontPicture? = nil
 
     func makeCoordinator() -> Coordinator { Coordinator(radar: radar) }
 
@@ -235,6 +237,22 @@ struct TVRadarMap: UIViewRepresentable {
             c.installedOutlook = outlookID
         }
 
+        // --- The Front view ---
+        //
+        // One overlay per grid, repainted per hour, as on the Mac: swapping
+        // the renderer's picture rather than the overlay never blanks the map.
+        c.frontPicture = front
+        if c.installedFront != front?.gridID {
+            for overlay in map.overlays where overlay is FrontOverlay { map.removeOverlay(overlay) }
+            c.frontRenderer = nil
+            if let front { map.addOverlay(FrontOverlay(front), level: .aboveRoads) }
+            c.installedFront = front?.gridID
+        }
+        if let front, let renderer = c.frontRenderer, renderer.picture.id != front.id {
+            renderer.picture = front
+            renderer.setNeedsDisplay()
+        }
+
         // --- The field ---
         c.installField(on: map)
         c.apply()
@@ -247,6 +265,9 @@ struct TVRadarMap: UIViewRepresentable {
         var appliedRadius: Double?
         var installedOutlines: [String] = []
         var installedCoverage: RadarCoverage?
+        var installedFront: String?
+        var frontPicture: FrontPicture?
+        var frontRenderer: FrontRenderer?
         var installedOutlook: String?
         var installedLines: [String] = []
         var installedHome: CLLocationCoordinate2D?
@@ -379,6 +400,14 @@ struct TVRadarMap: UIViewRepresentable {
         }
 
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let front = overlay as? FrontOverlay, let picture = frontPicture {
+                // Twice the Mac's size: read from a sofa, on a 1920-point screen.
+                let renderer = FrontRenderer(overlay: front, picture: picture,
+                                             ink: UIColor.label.resolvedColor(with: mapView.traitCollection).cgColor,
+                                             scale: 2)
+                frontRenderer = renderer
+                return renderer
+            }
             if let field = overlay as? FieldOverlay {
                 if let existing = slots[field.slot] { return existing }
                 let renderer = FieldRenderer(overlay: field)

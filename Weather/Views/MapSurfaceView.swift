@@ -50,7 +50,7 @@ import WeatherKit
 enum MapSurface: String, CaseIterable, Identifiable {
     // Looking ahead first, then what is happening now. The map opens on the
     // first of these; see `surface`.
-    case storms, excessiveRain, rainTotals, radar, cloud, fire
+    case storms, excessiveRain, rainTotals, front, radar, cloud, fire
 
     /// The SPC or WPC product this view draws, for the three forecast views.
     var forecast: OutlookProduct? {
@@ -58,7 +58,7 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .storms:        return .severeStorms
         case .excessiveRain: return .excessiveRain
         case .rainTotals:    return .rainTotals
-        case .radar, .cloud, .fire: return nil
+        case .radar, .cloud, .fire, .front: return nil
         }
     }
 
@@ -69,6 +69,7 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .radar: return "Radar"
         case .cloud: return "Cloud"
         case .fire:  return "Fire"
+        case .front: return "Front"
         case .storms:        return "Storms"
         case .excessiveRain: return "Excessive rain"
         case .rainTotals:    return "Rain totals"
@@ -80,6 +81,7 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .radar: return "cloud.rain"
         case .cloud: return "cloud"
         case .fire:  return "flame"
+        case .front: return "wind"
         case .storms:        return "cloud.bolt"
         case .excessiveRain: return "water.waves"
         case .rainTotals:    return "drop"
@@ -100,6 +102,7 @@ enum MapSurface: String, CaseIterable, Identifiable {
         case .radar: return "Rain, and where it's headed"
         case .cloud: return "The sky from above"
         case .fire:  return "Bans, and what's burning"
+        case .front: return "Where the wind turns and the air dries"
         case .storms:        return "Where storms may turn severe"
         case .excessiveRain: return "Where rain may turn to flooding"
         case .rainTotals:    return "How much rain, out to a week"
@@ -136,6 +139,8 @@ struct MapSurfaceView: View {
     /// The cloud view's loop. Owned here like the radar's, so switching views
     /// and back finds it already loaded.
     @StateObject private var satellite = SatelliteLoopModel()
+    /// The Front view's run and airports. Loads only while that view is on.
+    @StateObject private var front = FrontModel()
     @State private var fireProduct: TexasFireFieldSource.Product = .burnBan
     /// The day (or days totalled) chosen under each forecast view, kept per
     /// view so looking at storms on day 3 does not move rain totals off the
@@ -179,8 +184,8 @@ struct MapSurfaceView: View {
         case .radar: return radarSource
         case .cloud: return satelliteSource
         case .fire:  return fireSource
-        // Vectors, fetched whole: no tiles to count.
-        case .storms, .excessiveRain, .rainTotals: return nil
+        // Vectors, or a grid fetched whole: no tiles to count.
+        case .storms, .excessiveRain, .rainTotals, .front: return nil
         }
     }
 
@@ -189,7 +194,7 @@ struct MapSurfaceView: View {
         case .radar: return radar.stampsByUrgency
         case .cloud: return satellite.stampsByUrgency
         case .fire:  return [fireStamp]
-        case .storms, .excessiveRain, .rainTotals: return []
+        case .storms, .excessiveRain, .rainTotals, .front: return []
         }
     }
 
@@ -203,7 +208,7 @@ struct MapSurfaceView: View {
         case .radar: return radar.current.map { [$0.stamp] } ?? []
         case .cloud: return satellite.playhead.a.map { [$0.stamp] } ?? []
         case .fire:  return [fireStamp]
-        case .storms, .excessiveRain, .rainTotals: return []
+        case .storms, .excessiveRain, .rainTotals, .front: return []
         }
     }
 
@@ -249,6 +254,13 @@ struct MapSurfaceView: View {
                 }
             }
         }
+        // The Front view's spot card, under the view picker.
+        .overlay(alignment: .topLeading) {
+            if surface == .front {
+                FrontSpotCard(model: front, home: homePoint)
+                    .padding(.leading, 14).padding(.top, isCompact ? 14 : 80)
+            }
+        }
         // A click anywhere on the map closes the site list, as it would a
         // menu. Under the bar, so the list itself still takes clicks.
         .overlay {
@@ -286,6 +298,12 @@ struct MapSurfaceView: View {
         .task { await satellite.run() }
         .task { await watchProgress() }
         .task { await countyLines.load() }
+        .task(id: front.isPlaying) { if front.isPlaying { await front.play() } }
+        // Only while the Front view is on screen, and again if home moves.
+        .task(id: surface == .front ? "\(settings.homeLat)|\(settings.homeLon)" : "") {
+            guard surface == .front, let home = homePoint else { return }
+            await front.keepCurrent(home: home)
+        }
         // Only while a forecast is on screen — keyed on the choice, so picking
         // another view or day cancels the old poll and starts the new one.
         .task(id: "\(surface.rawValue)|\(outlookKey.map { "\($0.period)" } ?? "")") {
@@ -344,7 +362,11 @@ struct MapSurfaceView: View {
         MapCanvas(layers: layers,
                   focus: focus,
                   onDisplayTick: tick,
-                  onVisibleTiles: prefetch)
+                  onVisibleTiles: prefetch,
+                  // Under Front, a click asks what it's like there: the spot card.
+                  onTapMap: surface == .front ? { coordinate in
+                      front.spot = GeoPoint(latitude: coordinate.latitude, longitude: coordinate.longitude)
+                  } : nil)
             .ignoresSafeArea()
     }
 
@@ -401,7 +423,7 @@ struct MapSurfaceView: View {
             return ["cloud": out]
         case .fire:
             return ["fire": .init(stampA: fireStamp, stampB: fireStamp)]
-        case .storms, .excessiveRain, .rainTotals:
+        case .storms, .excessiveRain, .rainTotals, .front:
             return [:]
         }
     }
@@ -644,6 +666,10 @@ struct MapSurfaceView: View {
         if surface == .cloud, let failure = satellite.failure, satellite.frames.isEmpty {
             return FieldStatus(message: "Can't load the satellite", detail: failure, canRetry: true)
         }
+        if surface == .front, !settings.hasHome {
+            return FieldStatus(message: "Set your home to read a front",
+                               detail: "The map's grid is drawn around it", canRetry: false)
+        }
         if surface == .radar, radar.site == nil {
             return FieldStatus(message: "No radar chosen",
                                detail: "Set your home, or pick a radar in the panel",
@@ -776,6 +802,18 @@ struct MapSurfaceView: View {
                 caption: "\(coverage.rings.last?.miles ?? 0) mi"))
         }
 
+        // The spot the Front view's card describes.
+        if surface == .front, let spot = front.spot {
+            built.append(MapLayer(
+                id: "front-spot", name: "Spot", symbol: "mappin", role: .context, isOn: true,
+                content: .pins([MapPin(id: "front-spot-\(spot.latitude),\(spot.longitude)",
+                                       coordinate: CLLocationCoordinate2D(latitude: spot.latitude,
+                                                                          longitude: spot.longitude),
+                                       title: "", subtitle: nil, openID: nil,
+                                       tint: .accentColor, radiusMeters: nil)]),
+                caption: nil))
+        }
+
         // YOU, last, so the dot is never buried under a field. A radar picture
         // answers "is it about to rain on me", and that question is unanswerable
         // without the "me".
@@ -838,6 +876,14 @@ struct MapSurfaceView: View {
                                            playhead: .init(stampA: fireStamp,
                                                            stampB: fireStamp))),
                 caption: "Texas · fetched \(When.moment(Self.bucketStart(fireStamp, seconds: 3600)))")
+        case .front:
+            guard let picture = front.picture() else {
+                return MapLayer(id: "front", name: "Front", symbol: surface.symbol,
+                                role: .subject, isOn: true, content: .pins([]), caption: nil)
+            }
+            return MapLayer(id: "front", name: "Front", symbol: surface.symbol,
+                            role: .subject, isOn: true, content: .front(picture),
+                            caption: front.clue.label)
         case .storms, .excessiveRain, .rainTotals:
             // Nothing to draw until it loads, which the legend says in words.
             let key = outlookKey
@@ -1011,6 +1057,7 @@ struct MapSurfaceView: View {
         if let caption = radarCaption { out[.radar] = caption }
         out[.cloud] = satellite.band.label
         out[.fire] = fireProduct.label
+        if let passage = front.passage, passage > Date() { out[.front] = "home \(When.moment(passage))" }
         for view in MapSurface.allCases {
             if let product = view.forecast, let caption = forecastCaption(product) { out[view] = caption }
         }
@@ -1045,6 +1092,14 @@ struct MapSurfaceView: View {
                           isPlaying: radar.isPlaying,
                           togglePlay: { radar.isPlaying.toggle() },
                           scrub: { radar.scrub(to: $0) })
+        } else if surface == .front {
+            VStack(spacing: 8) {
+                FrontSummary(model: front, compact: true).mapCard(maxWidth: 760)
+                ScrollView(.horizontal, showsIndicators: false) { FrontMetricChips(model: front) }
+                    .mapCard(maxWidth: 760)
+                FrontHourStrip(model: front)
+            }
+            .padding(.horizontal, 12)
         } else if surface == .cloud, !satellite.frames.isEmpty {
             // The key over the strip, as the forecasts put theirs: what the
             // colours mean, and what they say about home.
@@ -1123,6 +1178,18 @@ extension MapSurfaceView {
                                       period: Binding(get: { forecastPeriods[product] ?? 1 },
                                                       set: { forecastPeriods[product] = $0 }),
                                       window: outlookWindow(key))
+                }
+            }
+        case .front:
+            MapViewBar(hasKey: true, keyOpen: $barKeyOpen, hasTop: true, hasSettings: true) {
+                FrontSummary(model: front, showsDetail: barKeyOpen)
+            } settings: {
+                FrontMetricChips(model: front)
+            } when: {
+                if front.run == nil {
+                    waiting(front.failure.map { "Can't load the HRRR: \($0)" } ?? "Loading the HRRR…")
+                } else {
+                    FrontHourStrip(model: front, chrome: false)
                 }
             }
         case .fire:
@@ -1318,6 +1385,8 @@ private struct LayerPanel: View {
                 .labelsHidden().pickerStyle(.segmented).controlSize(.small)
                 .frame(width: 150)
             }
+        case .front:
+            EmptyView()
         case .radar:
             VStack(alignment: .leading, spacing: 6) {
                 RadarSitePicker(choice: $radarSite, home: home)

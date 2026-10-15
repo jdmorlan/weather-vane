@@ -26,7 +26,7 @@
 import Foundation
 
 /// One model's newest run, as Open-Meteo describes it.
-public struct ModelRun: Equatable, Sendable {
+public struct ModelRun: Codable, Equatable, Sendable {
     /// The analysis time the run started from — "the 12Z run".
     public var initialised: Date
     /// When Open-Meteo finished taking it in.

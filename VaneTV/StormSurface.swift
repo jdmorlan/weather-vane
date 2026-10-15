@@ -67,6 +67,8 @@ struct StormSurface: View {
     @StateObject private var rainTotals = TVRainTotalsModel()
     @StateObject private var lines = TVBoundaries()
     @StateObject private var forecasters = ForecasterModel()
+    /// The Front view's run and airports. Loads only while it's on screen.
+    @StateObject private var front = FrontModel()
 
     @State private var tab: TVTab = .now
     /// Owned here rather than inside the map tab so the range survives leaving
@@ -112,7 +114,7 @@ struct StormSurface: View {
                     .background(Color.black)
             }
             Tab("Map", systemImage: "map", value: .map) {
-                MapTab(radar: radar, storms: storms, totals: rainTotals, hasHome: settings.hasHome,
+                MapTab(radar: radar, storms: storms, totals: rainTotals, front: front, hasHome: settings.hasHome,
                        home: settings.homePoint, radarSite: $radarSiteChoice,
                        range: $range, layer: $layer, day: $outlookDay)
             }
@@ -132,6 +134,7 @@ struct StormSurface: View {
         // measurement that put it here.
         .background {
             MapBackdrop(radar: radar, hazards: hazards, storms: storms, totals: rainTotals, lines: lines,
+                        front: front,
                         home: settings.homeCoordinate, center: mapCenter, range: range,
                         layer: layer, day: outlookDay,
                         isActive: tab == .map)
@@ -178,6 +181,9 @@ struct StormSurface: View {
             if !layer.periods.contains(outlookDay) || layer == .rainTotals {
                 outlookDay = layer.defaultPeriod
             }
+            // A front is hundreds of miles long; at a radar's zoom it's one
+            // colour edge to edge. Wide shows it coming across the state.
+            if layer == .front, range != .wide { range = .wide; focusSite = nil }
         }
         .onDisappear { driver.stop() }
         // `driving: false` — the display link above moves the loop. Two drivers
@@ -190,6 +196,11 @@ struct StormSurface: View {
         // On the surface, not the tab, so the LIVE badge appears without
         // anyone opening Videos first.
         .task { await forecasters.poll() }
+        // Only while Front is on screen, and again if home moves.
+        .task(id: tab == .map && layer == .front ? "\(settings.homeLat)|\(settings.homeLon)" : "") {
+            guard tab == .map, layer == .front, let home = settings.homePoint else { return }
+            await front.keepCurrent(home: home)
+        }
         .task(id: settings.homeLat) { await lines.load(home: settings.homePoint) }
         #if DEBUG
         // `-VaneStartTab map` opens on a tab, so a layout can be checked in
@@ -201,6 +212,13 @@ struct StormSurface: View {
             case "videos":   tab = .videos
             default:         break
             }
+        }
+        // `-VaneMapLayer front` then picks the map's view, once the tab has
+        // settled: arriving on Map resets the view to radar.
+        .task {
+            guard let name = UserDefaults.standard.string(forKey: "VaneMapLayer") else { return }
+            try? await Task.sleep(for: .seconds(1))
+            if let match = TVMapLayer.allCases.first(where: { "\($0)" == name }) { layer = match }
         }
         // A soak test for memory: `-VaneSoak YES` walks every range on the map,
         // then round the tabs, forever — what a remote does when someone is
@@ -263,7 +281,7 @@ enum TVSoak {
                 try? await Task.sleep(for: .seconds(6))
             }
             for (l, d) in [(TVMapLayer.storms, 1), (.storms, 2), (.excessiveRain, 1),
-                           (.rainTotals, 7), (.rainTotals, 3), (.radar, 1)] {
+                           (.rainTotals, 7), (.rainTotals, 3), (.front, 1), (.radar, 1)] {
                 layer.wrappedValue = l
                 day.wrappedValue = d
                 radarLog.info("soak lap \(lap): layer \(l.label, privacy: .public) day \(d)")

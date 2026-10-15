@@ -49,11 +49,12 @@ import WeatherKit
 
 /// What the map is showing.
 enum TVMapLayer: Hashable, CaseIterable {
-    case radar, storms, excessiveRain, rainTotals
+    case radar, front, storms, excessiveRain, rainTotals
 
     var label: String {
         switch self {
         case .radar:         return "Radar"
+        case .front:         return "Front"
         case .storms:        return "Severe storms"
         case .excessiveRain: return "Excessive rain outlook"
         case .rainTotals:    return "Rain totals"
@@ -63,6 +64,7 @@ enum TVMapLayer: Hashable, CaseIterable {
     var symbol: String {
         switch self {
         case .radar:         return "dot.radiowaves.left.and.right"
+        case .front:         return "wind"
         case .storms:        return "cloud.bolt.fill"
         case .excessiveRain: return "cloud.heavyrain.fill"
         case .rainTotals:    return "drop.fill"
@@ -73,7 +75,7 @@ enum TVMapLayer: Hashable, CaseIterable {
     /// the rain. Empty for the radar, which has ranges instead.
     var periods: [Int] {
         switch self {
-        case .radar:                  return []
+        case .radar, .front:          return []
         case .storms, .excessiveRain: return OutlookProduct.severeStorms.periods
         case .rainTotals:             return OutlookProduct.rainTotals.periods
         }
@@ -131,6 +133,7 @@ struct MapBackdrop: View {
     @ObservedObject var storms: StormOutlookModel
     @ObservedObject var totals: TVRainTotalsModel
     @ObservedObject var lines: TVBoundaries
+    @ObservedObject var front: FrontModel
     let home: CLLocationCoordinate2D?
     /// Where the map is centred: home, or a radar site once one is picked.
     let center: CLLocationCoordinate2D?
@@ -152,7 +155,8 @@ struct MapBackdrop: View {
                            outlook: layer == .rainTotals ? totals.totals[day]
                                                          : storms.outlook(for: layer, day: day),
                            counties: lines.counties, stateOutline: lines.outline,
-                           home: home)
+                           home: home,
+                           front: layer == .front ? front.picture() : nil)
                     .focusable(false)
             }
             .opacity(isActive ? 1 : 0)
@@ -166,7 +170,7 @@ extension StormOutlookModel {
     /// that day's has not loaded.
     func outlook(for layer: TVMapLayer, day: Int) -> Outlook? {
         switch layer {
-        case .radar, .rainTotals: return nil
+        case .radar, .rainTotals, .front: return nil
         case .storms:             return categorical.first { $0.period == day }
         case .excessiveRain:      return flood.first { $0.period == day }
         }
@@ -206,6 +210,7 @@ struct MapTab: View {
     @ObservedObject var radar: RadarModel
     @ObservedObject var storms: StormOutlookModel
     @ObservedObject var totals: TVRainTotalsModel
+    @ObservedObject var front: FrontModel
     let hasHome: Bool
     let home: GeoPoint?
     /// "auto" or an ICAO, as `StormSurface` stores it.
@@ -221,9 +226,19 @@ struct MapTab: View {
             HStack(alignment: .bottom, spacing: 16) {
                 viewMenu
                 zoomMenu
-                if layer == .radar { siteMenu } else { periodMenu }
+                if layer == .radar {
+                    siteMenu
+                } else if layer == .front {
+                    TVFrontMenus(model: front)
+                } else {
+                    periodMenu
+                }
                 Spacer(minLength: 40)
-                if layer != .radar { outlookCard }
+                if layer == .front {
+                    TVFrontCard(model: front)
+                } else if layer != .radar {
+                    outlookCard
+                }
             }
             .frame(maxHeight: .infinity, alignment: .bottom)
             .padding(52)
@@ -404,14 +419,16 @@ struct MapTab: View {
 }
 
 /// What a closed menu shows: what is chosen, and that pressing opens a list.
-private struct MenuLabel: View {
+struct MenuLabel: View {
     let symbol: String
     let text: String
 
     var body: some View {
         HStack(spacing: 14) {
             Image(systemName: symbol)
-            Text(text)
+            // One line, always: squeezed beside the card, a long choice
+            // ("Temperature") wrapped a letter at a time.
+            Text(text).lineLimit(1).fixedSize()
             Image(systemName: "chevron.up.chevron.down")
                 .font(.system(size: 20, weight: .semibold))
                 .foregroundStyle(.secondary)

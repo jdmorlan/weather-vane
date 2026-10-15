@@ -63,6 +63,9 @@ enum MapLayerContent {
     case regions(RegionSet)
     /// Lines with nothing inside them — county boundaries.
     case boundaries(BoundarySet)
+    /// The Front view's hour: a clue shaded, the wind, the airports. See
+    /// `FrontMap`.
+    case front(FrontPicture)
 }
 
 /// A raster field and where its loop currently is.
@@ -122,6 +125,7 @@ struct MapLayer: Identifiable {
     var coverage: RadarCoverage? { if case .coverage(let c) = content { return c }; return nil }
     var regions: RegionSet? { if case .regions(let r) = content { return r }; return nil }
     var boundaries: BoundarySet? { if case .boundaries(let b) = content { return b }; return nil }
+    var front: FrontPicture? { if case .front(let f) = content { return f }; return nil }
     var field: FieldLayer? {
         if case .field(let field) = content { return field }
         return nil
@@ -172,6 +176,10 @@ struct MapCanvas: MapViewRepresentable {
     /// just asked to draw, rather than inferring it from what MapKit asked for.
     var onVisibleTiles: ((String, [FieldTileGrid.Tile]) -> Void)?
 
+    /// A click (or tap) on the map itself, as a coordinate. Nil: clicks do
+    /// nothing but what MapKit does with them.
+    var onTapMap: ((CLLocationCoordinate2D) -> Void)?
+
     func makeCoordinator() -> Coordinator { Coordinator(onSelect: onSelect) }
 
 #if os(macOS)
@@ -209,6 +217,17 @@ struct MapCanvas: MapViewRepresentable {
             context.coordinator.appliedFocus = focus.token
         }
         context.coordinator.startDisplayLink(on: map)
+        // A click, not a drag: the recognizer only fires when the pointer
+        // didn't move, so panning is untouched.
+        #if os(macOS)
+        let click = NSClickGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.mapClicked(_:)))
+        click.delaysPrimaryMouseButtonEvents = false
+        map.addGestureRecognizer(click)
+        #else
+        let tap = UITapGestureRecognizer(target: context.coordinator, action: #selector(Coordinator.mapClicked(_:)))
+        tap.cancelsTouchesInView = false
+        map.addGestureRecognizer(tap)
+        #endif
         return map
     }
 
@@ -300,6 +319,26 @@ struct MapCanvas: MapViewRepresentable {
             c.installedBoundaries = boundaries.map(\.id)
         }
 
+        // --- The Front view ----------------------------------------------------
+        //
+        // ONE OVERLAY PER GRID, REPAINTED PER HOUR. Scrubbing the hours swaps
+        // the renderer's picture and asks for a redraw; removing and re-adding
+        // the overlay would blank the map for a frame at every step.
+        let front = visible.compactMap(\.front).first
+        // Held before the overlay goes in: MapKit asks for its renderer later,
+        // and the renderer is made from this.
+        c.frontPicture = front
+        if c.installedFront != front?.gridID {
+            for overlay in map.overlays where overlay is FrontOverlay { map.removeOverlay(overlay) }
+            c.frontRenderer = nil
+            if let front { map.addOverlay(FrontOverlay(front), level: .aboveRoads) }
+            c.installedFront = front?.gridID
+        }
+        if let front, let renderer = c.frontRenderer, renderer.picture.id != front.id {
+            renderer.picture = front
+            renderer.setNeedsDisplay()
+        }
+
         // --- Fields (radar, satellite, fire) ----------------------------------
         //
         // TWO OVERLAYS PER LAYER, AND NEITHER IS EVER REBUILT TO ANIMATE.
@@ -340,6 +379,7 @@ struct MapCanvas: MapViewRepresentable {
 
         c.onVisibleTiles = onVisibleTiles
         c.onDisplayTick = onDisplayTick
+        c.onTapMap = onTapMap
     }
 
     private func region(_ focus: MapFocus) -> MKCoordinateRegion {
@@ -358,6 +398,10 @@ struct MapCanvas: MapViewRepresentable {
         var installedCoverage: RadarCoverage?
         var installedRegions: [String] = []
         var installedBoundaries: [String] = []
+        var installedFront: String?
+        /// The newest picture, for a renderer MapKit asks for after the fact.
+        var frontPicture: FrontPicture?
+        var frontRenderer: FrontRenderer?
         /// `layerID|sourceID` per installed field, in draw order. The source id is
         /// in the key because changing a ramp changes the pixels, and the overlay
         /// has to be rebuilt for that even though the layer is "the same" layer.
@@ -380,6 +424,19 @@ struct MapCanvas: MapViewRepresentable {
 
         var onDisplayTick: ((Double) -> [String: FieldRenderer.Playhead])?
         var onVisibleTiles: ((String, [FieldTileGrid.Tile]) -> Void)?
+        var onTapMap: ((CLLocationCoordinate2D) -> Void)?
+
+        #if os(macOS)
+        @objc func mapClicked(_ recognizer: NSClickGestureRecognizer) {
+            guard let map = recognizer.view as? MKMapView, let onTapMap else { return }
+            onTapMap(map.convert(recognizer.location(in: map), toCoordinateFrom: map))
+        }
+        #else
+        @objc func mapClicked(_ recognizer: UITapGestureRecognizer) {
+            guard let map = recognizer.view as? MKMapView, let onTapMap else { return }
+            onTapMap(map.convert(recognizer.location(in: map), toCoordinateFrom: map))
+        }
+        #endif
 
         private var displayLink: CADisplayLink?
         private var lastTick: CFTimeInterval?
@@ -612,6 +669,12 @@ struct MapCanvas: MapViewRepresentable {
             }
             if let region = overlay as? RegionOverlay {
                 return RegionRenderer(region: region)
+            }
+            if let front = overlay as? FrontOverlay, let picture = frontPicture {
+                let renderer = FrontRenderer(overlay: front, picture: picture,
+                                             ink: PlatformColor(Color.primary).cgColor)
+                frontRenderer = renderer
+                return renderer
             }
             if let boundary = overlay as? BoundaryOverlay {
                 // The label colour, so the lines read on the light map and the

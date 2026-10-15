@@ -66,7 +66,7 @@ struct MapViewPicker: View {
 
     private static let groups: [(name: String, views: [MapSurface])] = [
         ("Now", [.radar, .cloud]),
-        ("Forecast", [.storms, .excessiveRain, .rainTotals]),
+        ("Forecast", [.front, .storms, .excessiveRain, .rainTotals]),
         ("Texas", [.fire]),
     ]
 
