@@ -40,6 +40,11 @@ struct RootView: View {
 
     @State private var destination: Destination = .now
     @State private var showingSetup = false
+    /// The Ask popover, and the search it last handed to Explore. On the root
+    /// because the toolbar is, and because Explore may not be on screen — or even
+    /// exist — when the question is asked. See `AskPopover`.
+    @State private var asking = false
+    @State private var asked: AskedQuery?
     @Environment(\.scenePhase) private var scenePhase
     #if !os(macOS)
     /// iPadOS only. On the Mac this state does not exist because the settings
@@ -197,6 +202,7 @@ struct RootView: View {
         case .now, .forecast, .rhythms, .rain, .compare, .history, .forecastCheck, .wind, .explore:
             if settings.hasWeatherStation {
                 WeatherView(models: models, destination: destination,
+                            asked: asked, adopted: { asked = nil },
                             navigate: { destination = $0 },
                             openSetup: { showingSetup = true },
                             refresh: {
@@ -256,6 +262,23 @@ struct RootView: View {
             .help("Settings")
         }
         #endif
+        // On every page, because a question doesn't wait for you to be on the
+        // page that answers it.
+        ToolbarItem {
+            Button { asking = true } label: {
+                Image(systemName: "text.bubble")
+            }
+            .help("Ask a question (⌘K)")
+            .keyboardShortcut("k", modifiers: .command)
+            .popover(isPresented: $asking, arrowEdge: .bottom) {
+                AskPopover { page, query in
+                    if let query { asked = AskedQuery(query: query) }
+                    destination = page
+                    asking = false
+                }
+                .presentationCompactAdaptation(.popover)
+            }
+        }
         ToolbarItem {
             Button {
                 Task {

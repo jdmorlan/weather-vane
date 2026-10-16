@@ -115,6 +115,11 @@ struct WeatherView: View {
     /// sidebar it has to be a request rather than an assignment.
     var navigate: (Destination) -> Void
 
+    /// A search asked for in words (the toolbar's Ask), to adopt into `query`
+    /// and then report taken, so a later visit doesn't put it back over your edits.
+    var asked: AskedQuery?
+    var adopted: () -> Void
+
     /// Ask the window to open setup. A request for the same reason `navigate` is
     /// one: the sheet is owned by the root, because a sheet presented by a view
     /// that navigation can unmount is a sheet that vanishes mid-flow.
@@ -127,6 +132,8 @@ struct WeatherView: View {
 
     init(models: StationModels,
          destination: Destination,
+         asked: AskedQuery? = nil,
+         adopted: @escaping () -> Void = {},
          navigate: @escaping (Destination) -> Void = { _ in },
          openSetup: @escaping () -> Void = {},
          refresh: @escaping () async -> Void = {}) {
@@ -139,6 +146,8 @@ struct WeatherView: View {
         precip = models.precip
         storms = models.storms
         self.destination = destination
+        self.asked = asked
+        self.adopted = adopted
         self.navigate = navigate
         self.openSetup = openSetup
         self.refresh = refresh
@@ -157,6 +166,13 @@ struct WeatherView: View {
             } else {
                 Color.clear
             }
+        }
+        // `initial`, because coming from a page that isn't this view (the map),
+        // this view is new and the question arrived before it did.
+        .onChange(of: asked, initial: true) { _, asked in
+            guard let asked else { return }
+            query = asked.query
+            adopted()
         }
         // NOTE — Almanac wired two more modifiers in here: a `SurfaceRouter` that
         // let a conversation hand this view a `DayQuery` to adopt, and a matching
