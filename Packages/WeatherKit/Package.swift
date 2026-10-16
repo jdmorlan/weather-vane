@@ -29,9 +29,14 @@ let package = Package(
         // Asking in words: the on-device model picks a page and writes that page's
         // settings. Its own target so WeatherKit stays model-free. See `Ask`.
         .target(name: "WeatherAsk", dependencies: ["WeatherKit"]),
-        // How often it gets that right, measured. Not a test — see AskEval.swift.
-        .executableTarget(name: "ask-eval", dependencies: ["WeatherKit", "WeatherAsk"],
+        // How often the model — or the parser — gets that right. See AskEval.swift.
+        // The questions both are measured against — one list, shared with the
+        // parser's checklist below.
+        .target(name: "AskQuestions", dependencies: ["WeatherKit"]),
+        .executableTarget(name: "ask-eval", dependencies: ["WeatherKit", "WeatherAsk", "AskQuestions"],
                           path: "Sources/AskEval"),
+        // `QuestionParser` against every question in AskQuestions.
+        .testTarget(name: "AskQuestionsTests", dependencies: ["WeatherKit", "AskQuestions"]),
         .testTarget(name: "WeatherKitTests", dependencies: ["WeatherKit", "RadarKernel"],
                     // Real Level II bytes: the first two records of a KFWS volume.
                     resources: [.copy("Fixtures")]),
