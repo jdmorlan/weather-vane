@@ -26,6 +26,12 @@ let package = Package(
         // libbz2 from the SDK, for NEXRAD Level II. A system library rather than a
         // vendored copy: every platform the app ships on already has it.
         .systemLibrary(name: "CBzip2"),
+        // Asking in words: the on-device model picks a page and writes that page's
+        // settings. Its own target so WeatherKit stays model-free. See `Ask`.
+        .target(name: "WeatherAsk", dependencies: ["WeatherKit"]),
+        // How often it gets that right, measured. Not a test — see AskEval.swift.
+        .executableTarget(name: "ask-eval", dependencies: ["WeatherKit", "WeatherAsk"],
+                          path: "Sources/AskEval"),
         .testTarget(name: "WeatherKitTests", dependencies: ["WeatherKit", "RadarKernel"],
                     // Real Level II bytes: the first two records of a KFWS volume.
                     resources: [.copy("Fixtures")]),
