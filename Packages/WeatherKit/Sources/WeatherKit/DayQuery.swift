@@ -317,6 +317,9 @@ extension DailyRecord {
 public enum Test: Equatable, Sendable, Hashable {
     case atOrAbove(Double)
     case below(Double)
+    /// Inclusive below — what a freeze is. 0.0°C reads as exactly 32.0°F, and
+    /// "below 32" would miss every one of those nights.
+    case atOrBelow(Double)
     case between(Double, Double)     // [lower, upper)
     case inBand(String)
 
@@ -324,6 +327,7 @@ public enum Test: Equatable, Sendable, Hashable {
         switch self {
         case .atOrAbove(let threshold): return value >= threshold
         case .below(let threshold): return value < threshold
+        case .atOrBelow(let threshold): return value <= threshold
         case .between(let lower, let upper): return value >= lower && value < upper
         case .inBand(let name):
             guard let band = measure.bands.first(where: { $0.name == name }) else { return false }
@@ -336,7 +340,7 @@ public enum Test: Equatable, Sendable, Hashable {
     var direction: Reading? {
         switch self {
         case .atOrAbove: return .floor        // proving it needs a high enough reading
-        case .below: return .ceiling          // proving it needs a low enough reading
+        case .below, .atOrBelow: return .ceiling   // proving it needs a low enough reading
         case .between, .inBand: return nil
         }
     }
@@ -356,6 +360,7 @@ public struct Condition: Equatable, Sendable, Hashable, Identifiable {
         switch test {
         case .atOrAbove(let v): return "\(measure.name) \(measure.format(v)) or above"
         case .below(let v): return "\(measure.name) below \(measure.format(v))"
+        case .atOrBelow(let v): return "\(measure.name) \(measure.format(v)) or below"
         case .between(let a, let b): return "\(measure.name) \(measure.format(a))–\(measure.format(b))"
         case .inBand(let name): return "\(measure.name) is \(name)"
         }
@@ -1318,23 +1323,30 @@ extension Climatology {
         }
     }
 
+    /// One day's answer to the query's day-level clauses: yes, no, or nil when the day can't settle it.
+    ///
+    /// A single unanswerable condition makes the whole day unanswerable — unless another condition
+    /// already proved a definite NO, which settles it regardless of what the rest couldn't say.
+    /// Internal, not private: `WhenInTheYear` reads the same verdicts a day at a time, and a second copy
+    /// of this rule is exactly the kind of duplicate that drifts.
+    func verdict(_ query: DayQuery, on record: DailyRecord) -> Bool? {
+        var verdicts = query.conditions.map { $0.evaluate(record) }
+        if let clause = query.precededBy {
+            verdicts.append(precedingVerdict(clause, before: record.day))
+        }
+        if verdicts.contains(false) { return false }
+        if verdicts.contains(nil) { return nil }
+        return true
+    }
+
     private func evaluate(_ query: DayQuery, over days: [DailyRecord]) -> Tally {
         var tally = Tally()
         for record in days {
-            var verdicts = query.conditions.map { $0.evaluate(record) }
-            if let clause = query.precededBy {
-                verdicts.append(precedingVerdict(clause, before: record.day))
-            }
-
-            // A single unanswerable condition makes the whole day unanswerable
-            // — unless another condition already proved a definite NO, which
-            // settles it regardless of what the rest couldn't say.
-            let definiteNo = verdicts.contains(false)
-            let anyUnknown = verdicts.contains(nil)
-            guard !anyUnknown || definiteNo else {
+            let answer = verdict(query, on: record)
+            guard let answer else {
                 // Unsettleable — but if what it DID record reads as a match,
                 // say so rather than let it vanish.
-                if !definiteNo, wouldMatch(query, record) {
+                if wouldMatch(query, record) {
                     let values = query.conditions.compactMap { record[keyPath: $0.measure.path] }
                     tally.unconfirmed.append(MatchedDay(record: record, values: values))
                 }
@@ -1347,7 +1359,7 @@ extension Climatology {
             tally.answeredDays.insert(record.day)
             tally.answeredByMonthDay[monthDay, default: 0] += 1
             tally.answeredByYear[year, default: 0] += 1
-            guard !definiteNo else { continue }
+            guard answer else { continue }
 
             let values = query.conditions.compactMap { record[keyPath: $0.measure.path] }
             tally.matches.append(MatchedDay(record: record, values: values))

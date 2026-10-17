@@ -213,6 +213,7 @@ extension Test {
         switch kind {
         case "atOrAbove": self = .atOrAbove(try number("value"))
         case "below":     self = .below(try number("value"))
+        case "atOrBelow": self = .atOrBelow(try number("value"))
         case "between":   self = .between(try number("lower"), try number("upper"))
         case "inBand":
             guard let band = json["band"] as? String else {
@@ -238,7 +239,7 @@ extension Test {
             self = .inBand(band)
         default:
             throw QueryLanguageError.unknown(path: "\(path).kind", got: kind,
-                                             allowed: ["atOrAbove", "below", "between", "inBand"])
+                                             allowed: ["atOrAbove", "below", "atOrBelow", "between", "inBand"])
         }
     }
 
@@ -246,6 +247,7 @@ extension Test {
         switch self {
         case .atOrAbove(let v): return ["kind": "atOrAbove", "value": v]
         case .below(let v):     return ["kind": "below", "value": v]
+        case .atOrBelow(let v): return ["kind": "atOrBelow", "value": v]
         case .between(let a, let b): return ["kind": "between", "lower": a, "upper": b]
         case .inBand(let name): return ["kind": "inBand", "band": name]
         }
@@ -467,6 +469,9 @@ public extension DayQuery {
                          "required": ["kind", "value"]],
                         ["type": "object",
                          "properties": ["kind": ["const": "below"], "value": ["type": "number"]],
+                         "required": ["kind", "value"]],
+                        ["type": "object",
+                         "properties": ["kind": ["const": "atOrBelow"], "value": ["type": "number"]],
                          "required": ["kind", "value"]],
                         ["type": "object",
                          "properties": ["kind": ["const": "between"],

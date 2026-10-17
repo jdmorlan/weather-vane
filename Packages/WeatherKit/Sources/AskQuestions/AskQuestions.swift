@@ -238,15 +238,17 @@ public let heldOut: [Case] = [
 public func canonical(_ q: DayQuery) -> String {
     func range(_ c: Condition) -> String {
         var lower: Double?, upper: Double?
+        var closed = false
         switch c.test {
         case .atOrAbove(let v): lower = v
         case .below(let v): upper = v
+        case .atOrBelow(let v): upper = v; closed = true
         case .between(let a, let b): lower = a; upper = b
         case .inBand(let name):
             let band = c.measure.bands.first { $0.name == name }
             lower = band?.lower; upper = band?.upper
         }
-        return "\(c.measure.rawValue)[\(lower.map { "\($0)" } ?? "-∞"),\(upper.map { "\($0)" } ?? "∞"))"
+        return "\(c.measure.rawValue)[\(lower.map { "\($0)" } ?? "-∞"),\(upper.map { "\($0)" } ?? "∞")\(closed ? "]" : ")")"
     }
     var parts = ["when " + q.conditions.map(range).sorted().joined(separator: " & ")]
     if let s = q.scope { parts.append("dates \(s.start)..<\(s.endExclusive)") }

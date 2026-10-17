@@ -117,35 +117,6 @@ public struct Aggregate: Equatable, Sendable, Hashable {
     }
 }
 
-// MARK: - Named questions
-
-public extension DayQuery {
-    /// Report questions, the way `presets` are selection questions.
-    ///
-    /// These are the History tab's cards written as sentences in the query language — which is the point
-    /// of the exercise: a card that used to be a hand-built view is now a QUESTION you can open, edit,
-    /// and take somewhere else. The tuned cards stay where they are for now; what changes is that they're
-    /// no longer the only way to ask.
-    static var reportPresets: [DayQuery] {
-        [DayQuery(name: "Wettest months", conditions: [],
-                  aggregate: Aggregate(measure: .rain, reduce: .sum, groupBy: .month,
-                                       rank: .highest, limit: 12)),
-         DayQuery(name: "Rain by month of the year", conditions: [],
-                  aggregate: Aggregate(measure: .rain, reduce: .sum, groupBy: .monthOfYear)),
-         DayQuery(name: "Rain by year", conditions: [],
-                  aggregate: Aggregate(measure: .rain, reduce: .sum, groupBy: .year)),
-         DayQuery(name: "Average high by year", conditions: [],
-                  aggregate: Aggregate(measure: .high, reduce: .mean, groupBy: .year)),
-         DayQuery(name: "Hottest day each year", conditions: [],
-                  aggregate: Aggregate(measure: .high, reduce: .max, groupBy: .year)),
-         DayQuery(name: "Coldest night each year", conditions: [],
-                  aggregate: Aggregate(measure: .low, reduce: .min, groupBy: .year)),
-         DayQuery(name: "Windiest months", conditions: [],
-                  aggregate: Aggregate(measure: .gust, reduce: .max, groupBy: .month,
-                                       rank: .highest, limit: 12))]
-    }
-}
-
 // MARK: - What comes back
 
 public struct AggregateGroup: Equatable, Sendable, Identifiable {

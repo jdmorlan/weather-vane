@@ -94,9 +94,6 @@ struct WeatherView: View {
     /// source of truth for the same fact.
     let destination: Destination
 
-    /// Held here rather than inside Explore so another card can hand one over.
-    /// Opens on THIS year: "how often has it rained lately" is the question you
-    /// arrive with, and all-time is a deliberate widening from there.
     /// A position one archive page hands the other — Compare's "open 2023" or
     /// History's "compare with other Septembers". Held here for the same reason
     /// as `query`: the page receiving it isn't on screen yet when it's set.
@@ -104,11 +101,9 @@ struct WeatherView: View {
     /// The rain gauge sheet, opened from the "your gauge hasn't measured any"
     /// note on Now.
     @State private var loggingGauge = false
-    @State private var query: DayQuery = {
-        var seeded = DayQuery.presets[0]
-        seeded.years = .year(Calendar.current.component(.year, from: Date()))
-        return seeded
-    }()
+    /// Explore's question, held here so Ask can hand one over. Opens on the
+    /// first season, "When is it hot?".
+    @State private var query: DayQuery = ExploreQuestion.standard.query
 
     /// Ask the window to go somewhere. The History → Explore hand-off used to be
     /// `tab = .explore` on a private `@State`; with selection living in the
@@ -186,10 +181,6 @@ struct WeatherView: View {
 
     @ViewBuilder private func dashboard(_ r: WeatherReport) -> some View {
         ScrollView {
-            // Wrapped so a card can move the page — Explore's notices hand a
-            // query to a builder that's usually below the fold, and changing
-            // something off-screen is indistinguishable from a dead click.
-            ScrollViewReader { scroll in
             // LAZY: the cards below the fold were rendering whether or not you'd scrolled to them, so a
             // rebuilt result paid for the day list, the calendar and the streaks even while you were
             // looking at the controls at the top.
@@ -270,11 +261,7 @@ struct WeatherView: View {
                 case .wind:
                     windSection
                 case .explore:
-                    exploreSection(r) {
-                        withAnimation(.easeInOut(duration: 0.25)) {
-                            scroll.scrollTo(WeatherExploreView.builderAnchor, anchor: .top)
-                        }
-                    }
+                    exploreSection(r)
                 // Their own views, reached from the sidebar. Listed rather than
                 // defaulted so that adding another destination is a compile
                 // error here instead of a blank screen.
@@ -288,7 +275,6 @@ struct WeatherView: View {
             .padding(24)
             .frame(maxWidth: 1180, alignment: .leading)
             .frame(maxWidth: .infinity)
-            }
         }
         .refreshable { await refresh() }
         .sheet(isPresented: $loggingGauge) {
@@ -483,11 +469,16 @@ struct WeatherView: View {
         .background(RoundedRectangle(cornerRadius: 16).fill(Color.primary.opacity(0.045)))
     }
 
-    @ViewBuilder private func exploreSection(_ r: WeatherReport,
-                                             onOpenQuery: @escaping () -> Void) -> some View {
+    @ViewBuilder private func exploreSection(_ r: WeatherReport) -> some View {
         if let climate = archive.climatology, climate.dayCount >= 30 {
-            WeatherExploreView(climate: climate, today: todayKey(r), query: $query,
-                               onOpenQuery: onOpenQuery)
+            // A record, a dot or a month is a door into that day or month, in History.
+            WeatherExploreView(climate: climate, today: todayKey(r), query: $query) { day in
+                archiveFocus = ArchiveFocus(lens: .history, grain: .day, day: day)
+                navigate(.history)
+            } openMonth: { day in
+                archiveFocus = ArchiveFocus(lens: .history, grain: .month, day: day)
+                navigate(.history)
+            }
         } else if archive.isLoadingClimatology {
             preparing("Reading your archive", detail: "Indexing the record so it can be questioned.")
         } else {
@@ -588,8 +579,13 @@ struct WeatherView: View {
     /// position on the calendar, for someone who just wants to know the place.
     @ViewBuilder private func rhythmsSection(_ r: WeatherReport) -> some View {
         if let climate = archive.climatology, climate.dayCount >= 90 {
-            RhythmQuestionsView(climate: climate, today: todayKey(r),
-                                forecast: seasonForecast(r))
+            RhythmsView(climate: climate, today: todayKey(r)) { day in
+                archiveFocus = ArchiveFocus(lens: .history, grain: .day, day: day)
+                navigate(.history)
+            } explore: { question in
+                query = question
+                navigate(.explore)
+            }
             // ALWAYS A CARD, even without its answer. This one is built from the
             // minute archive rather than the daily one, so it arrives on its own
             // schedule — and when it was simply absent until then, nothing on the
@@ -632,25 +628,6 @@ struct WeatherView: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// The ten-day outlook in the archive's own terms, so the season timeline can
-    /// correct its normals against days we actually know about.
-    ///
-    /// The archive's dew point is a daily MEAN; the outlook reports the muggiest
-    /// and least-muggy hour, so the midpoint is the closest honest stand-in. A day
-    /// with only one of the two is left unanswered rather than made up.
-    private func seasonForecast(_ r: WeatherReport) -> [SeasonForecastDay] {
-        let zone = r.timezone ?? .current
-        return r.days.map { day in
-            let dew: Double?
-            if let high = day.dewPointHigh, let low = day.dewPointLow { dew = (high + low) / 2 }
-            else { dew = nil }
-            return SeasonForecastDay(
-                day: DayKey.string(for: Date(timeIntervalSince1970: TimeInterval(day.epoch)),
-                                   timeZone: zone),
-                tempMax: day.high, tempMin: day.low, dewPointMean: dew)
-        }
     }
 
     // MARK: The local archive
