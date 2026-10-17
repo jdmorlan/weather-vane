@@ -378,3 +378,14 @@ extension Climatology {
         return notices
     }
 }
+
+extension Climatology {
+    /// Days from `day` to the next occurrence of a `MM-dd`, rolling to next year
+    /// when the date has already passed.
+    static func daysUntil(monthDay: String, from day: String) -> Int? {
+        guard let year = DayKey.year(of: day) else { return nil }
+        let thisYear = "\(year)-\(monthDay)"
+        if thisYear >= day { return DayKey.distance(from: day, to: thisYear) }
+        return DayKey.distance(from: day, to: "\(year + 1)-\(monthDay)")
+    }
+}

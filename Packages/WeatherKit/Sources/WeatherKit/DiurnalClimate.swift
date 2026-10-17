@@ -1,7 +1,7 @@
 //
 //  DiurnalClimate.swift  (WeatherKit)
 //
-//  THE OTHER CYCLE. `YearRhythm` answers when things happen across a year; this
+//  THE OTHER CYCLE. `WhenInTheYear` answers when things happen across a year; this
 //  answers when they happen across a DAY, and how that shape changes month to
 //  month.
 //

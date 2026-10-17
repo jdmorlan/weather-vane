@@ -4,10 +4,10 @@
 //  Day-of-year geometry: "how far across the year is March 4", in one
 //  multiplication.
 //
-//  IT LIVES HERE BECAUSE TWO THINGS NEED IT NOW. It was written for the period
-//  brush, in the app target, where it was the only thing that had to turn a
-//  `MM-dd` into a position on a strip. `YearRhythm` needs exactly the same
-//  mapping down in the package, and the one thing worse than a calendar in the
+//  IT LIVES IN THE PACKAGE BECAUSE MORE THAN THE APP NEEDS IT. It was written
+//  for the period brush, in the app target, where it was the only thing that
+//  had to turn a `MM-dd` into a position on a strip. `WhenInTheYear` needs
+//  exactly the same mapping, and the one thing worse than a calendar in the
 //  wrong layer is two calendars that disagree about February — so it moved
 //  rather than being copied. Nothing about it was ever app-shaped; it is
 //  arithmetic on month lengths.
