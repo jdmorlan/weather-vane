@@ -728,6 +728,9 @@ struct HourTimeline: View {
         for i in hours.indices where localHours[i] % every == 0 {
             guard let speed = hours[i].windAvg, speed >= 1 else { continue }
             let cx = x(Double(i), colW)
+            // The arrow sits left of its hour; on the figure's first hour or
+            // two there's no room for it, and it was drawn half off the edge.
+            guard cx - pt(13) >= 0 else { continue }
             if let from = hours[i].windDirection ?? hours[i].windDirectionCardinal.flatMap(Self.degrees) {
                 var layer = ctx
                 layer.translateBy(x: cx - pt(9), y: mid)
@@ -800,9 +803,14 @@ struct HourTimeline: View {
 
     private func drawAxis(_ ctx: GraphicsContext, _ colW: CGFloat) {
         let every = isSingleDay ? 3 : 6
+        let right = CGFloat(hours.count) * colW
         for i in hours.indices where localHours[i] % every == 0 && (isSingleDay || localHours[i] != 0) {
-            ctx.draw(Text(hours[i].clock.uppercased()).font(.system(size: tx(9))).foregroundStyle(.tertiary),
-                     at: CGPoint(x: x(Double(i), colW), y: lanes.axisTop), anchor: .top)
+            let label = ctx.resolve(Text(hours[i].clock.uppercased()).font(.system(size: tx(9))).foregroundStyle(.tertiary))
+            let half = label.measure(in: CGSize(width: CGFloat.infinity, height: .infinity)).width / 2
+            // Kept inside the figure: a label on the first or last hour was
+            // centred on it and lost its first or last letters ("OON").
+            let cx = min(max(x(Double(i), colW), half), right - half)
+            ctx.draw(label, at: CGPoint(x: cx, y: lanes.axisTop), anchor: .top)
         }
     }
 

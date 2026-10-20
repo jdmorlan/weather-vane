@@ -133,7 +133,7 @@ enum Destination: String, CaseIterable, Identifiable, Hashable {
         case .forecast: return "Temperature, rain, wind and storms, three days out"
         case .map:     return "What's around you, and what's on the way"
         case .rhythms: return "When things usually happen here"
-        case .rain:    return "How much falls, how often, and how long between"
+        case .rain:    return "This year, lately, drought, and what's coming"
         case .compare: return "This stretch against the same stretch in other years"
         case .history: return "What one day, month or season was like"
         case .forecastCheck: return "Each morning's forecast against the high that happened"
