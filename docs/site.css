@@ -76,23 +76,6 @@ h3 { font-size: 18px; margin: 0 0 6px; }
 main section.wrap { padding-top: 112px; }
 main section.wrap:first-child { padding-top: 96px; }
 
-.teach .intro { color: var(--ink-2); max-width: 680px; }
-.quotes { display: grid; gap: 14px; margin-top: 22px; }
-@media (min-width: 820px) { .quotes { grid-template-columns: repeat(3, 1fr); } }
-.quotes figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
-.quotes figcaption { font-size: 13px; color: var(--ink-3); padding-left: 4px; }
-blockquote {
-  flex: 1;
-  margin: 0;
-  padding: 18px 20px;
-  background: var(--card);
-  border: 1px solid var(--rule);
-  border-left: 3px solid var(--warm);
-  border-radius: 10px;
-  font-size: 16px;
-  color: var(--ink);
-}
-
 /* A feature: its words, then its picture at full width. The pictures are
    cropped to the part of the window the words describe. */
 .feature { display: grid; gap: 28px; }
