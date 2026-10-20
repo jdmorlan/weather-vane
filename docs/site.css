@@ -8,6 +8,7 @@
   --accent: #2f6fd6;
   --warm: #e08a2e;
   --shadow: 0 18px 50px rgba(20, 30, 50, 0.14);
+  --glow: rgba(47, 111, 214, 0.14);
 }
 @media (prefers-color-scheme: dark) {
   :root {
@@ -20,6 +21,7 @@
     --accent: #6ea1ff;
     --warm: #f0a24f;
     --shadow: 0 18px 50px rgba(0, 0, 0, 0.45);
+    --glow: rgba(110, 161, 255, 0.16);
   }
 }
 
@@ -43,12 +45,16 @@ h2 { font-size: 30px; margin: 0 0 12px; }
 h3 { font-size: 18px; margin: 0 0 6px; }
 
 /* Hero */
-.hero { text-align: center; padding: 72px 0 0; overflow: hidden; }
+.hero {
+  text-align: center; padding: 80px 0 0; overflow: hidden;
+  background: radial-gradient(1100px 520px at 50% -10%, var(--glow), transparent 70%);
+}
 .hero .icon { margin: 0 auto 18px; border-radius: 22%; }
 .hero h1 { font-size: 56px; margin: 0; }
 .lede { font-size: 26px; color: var(--ink); margin: 6px 0 12px; font-weight: 500; }
 .sub { max-width: 620px; margin: 0 auto; color: var(--ink-2); }
-.status { margin: 18px 0 0; font-size: 14px; color: var(--ink-3); }
+.platforms-line { margin: 22px 0 0; font-size: 15px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink); }
+.status { margin: 6px 0 0; font-size: 14px; color: var(--ink-3); }
 .hero-shot { max-width: 1180px; margin: 48px auto 0; padding: 0 16px; }
 
 /* Screenshots: a picture that hasn't been taken yet holds its place. */
@@ -61,12 +67,19 @@ h3 { font-size: 18px; margin: 0 0 6px; }
   width: 100%;
 }
 
-main section { padding: 72px 0 0; }
+/* Named with the class: `.wrap` sets the sections' padding and margin, and
+   a bare `main section` lost to it, which left every section touching the
+   one above. */
+main section.wrap { padding-top: 112px; }
+main section.wrap:first-child { padding-top: 96px; }
 
 .teach .intro { color: var(--ink-2); max-width: 680px; }
 .quotes { display: grid; gap: 14px; margin-top: 22px; }
 @media (min-width: 820px) { .quotes { grid-template-columns: repeat(3, 1fr); } }
+.quotes figure { margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.quotes figcaption { font-size: 13px; color: var(--ink-3); padding-left: 4px; }
 blockquote {
+  flex: 1;
   margin: 0;
   padding: 18px 20px;
   background: var(--card);
@@ -77,15 +90,19 @@ blockquote {
   color: var(--ink);
 }
 
-.feature { display: grid; gap: 28px; align-items: center; }
+/* A feature: its words, then its picture at full width. The pictures are
+   cropped to the part of the window the words describe. */
+.feature { display: grid; gap: 28px; }
+.feature .text { max-width: 720px; }
 @media (min-width: 900px) {
-  .feature { grid-template-columns: 5fr 7fr; gap: 48px; }
-  .feature.flip .text { order: 2; }
+  .feature .text { display: grid; grid-template-columns: 220px 1fr; column-gap: 32px; max-width: none; }
+  .feature .text h2 { grid-row: span 3; }
+  .feature .text p { margin-top: 0; }
 }
 .feature p { color: var(--ink-2); }
 
-.more ul, .sources ul { padding-left: 20px; color: var(--ink-2); }
-.more li, .sources li { margin: 6px 0; }
+.more ul { padding-left: 20px; color: var(--ink-2); margin: 0; }
+.more li { margin: 8px 0; }
 .more strong { color: var(--ink); }
 
 .platforms .grid { display: grid; gap: 14px; }
@@ -96,10 +113,15 @@ blockquote {
   border-radius: 12px;
   padding: 18px 20px;
 }
-.platforms p, .needs p { color: var(--ink-2); margin: 0; }
+.platforms p { color: var(--ink-2); margin: 0; }
+.pair { display: grid; gap: 40px; }
+@media (min-width: 820px) { .pair { grid-template-columns: 1fr 1fr; gap: 56px; } }
+.pair p { color: var(--ink-2); margin: 0; }
+.pair ul { padding-left: 20px; color: var(--ink-2); margin: 0; }
+.pair li { margin: 6px 0; }
 .note { margin-top: 14px !important; font-size: 15px; }
 
-footer { padding: 72px 16px 48px; color: var(--ink-3); font-size: 14px; border-top: 1px solid var(--rule); margin-top: 72px; }
+footer { padding: 32px 16px 48px; color: var(--ink-3); font-size: 14px; border-top: 1px solid var(--rule); margin-top: 104px; }
 .fine { font-size: 13px; color: var(--ink-3); }
 
 /* Privacy */

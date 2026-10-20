@@ -17,6 +17,7 @@
     <p class="lede">Your weather station, explained.</p>
     <p class="sub">A weather app for a Tempest station that says <em>why</em>, not just what —
       read from your own years of readings. For Mac, iPhone, iPad and Apple TV.</p>
+    <p class="platforms-line">Mac · iPhone · iPad · Apple TV</p>
     <p class="status">In beta on TestFlight · not on the App Store yet</p>
   </div>
   <figure class="shot hero-shot">
@@ -32,10 +33,13 @@
     numbers printed on the picture — and wherever it can, with a mechanism you can check in
     your own data.</p>
   <div class="quotes">
-    <blockquote>Ahead on rain this year and still in drought: the rating weighs months of soil,
+    <figure><blockquote>6° cooler than usual for October 20 — the coolest October 20 in 5 years of record.</blockquote>
+      <figcaption>Now, against your own years</figcaption></figure>
+    <figure><blockquote>Ahead on rain this year and still in drought: the rating weighs months of soil,
       streams and heat, not inches since January.</blockquote>
-    <blockquote>Solid: measured at the station · Dashed: forecast</blockquote>
-    <blockquote>Dry · no storms expected · gusts under 20 mph</blockquote>
+      <figcaption>Rain, when the station and the drought map disagree</figcaption></figure>
+    <figure><blockquote>Dry · no storms expected · gusts under 20 mph</blockquote>
+      <figcaption>The forecast chart, naming the lanes it left out</figcaption></figure>
   </div>
 </section>
 
@@ -48,10 +52,10 @@
     <p>Below that, every year on record as a row on the calendar: each rain day, every dry
       spell of two weeks or more, the biggest days labelled.</p>
   </div>
-  <figure class="shot"><img src="screens/mac-rain.png" alt="The Rain page: four tiles for this year, lately, drought and what's coming."></figure>
+  <figure class="shot"><img src="screens/rain-tiles.png" alt="The top of the Rain page: this year's running total against the usual, the last thirty days, the drought rating, and what's coming." loading="lazy"></figure>
 </section>
 
-<section class="wrap feature flip">
+<section class="wrap feature">
   <div class="text">
     <h2>Forecast</h2>
     <p>The next three days as one figure: temperature, dew point, rain, wind and storms on a
@@ -61,7 +65,7 @@
       high-resolution short-range model, eight globals and an AI model — with the
       disagreement left in, because "4 of 11" is something you can argue with and "36%" isn't.</p>
   </div>
-  <figure class="shot"><img src="screens/mac-forecast.png" alt="The Forecast page: three days of temperature, dew point, rain and wind."></figure>
+  <figure class="shot"><img src="screens/forecast-chart.png" alt="The next three days as one chart: temperature, the dew point band and wind arrows, with the quiet lanes named above it." loading="lazy"></figure>
 </section>
 
 <section class="wrap feature">
@@ -71,10 +75,10 @@
       totals, fronts and burn bans — each layer named and dated by its source, never blended
       into something that looks like a measurement and isn't.</p>
   </div>
-  <figure class="shot"><img src="screens/mac-map.png" alt="The Map: radar over the home area."></figure>
+  <figure class="shot"><img src="screens/map-region.jpg" alt="The Map with the week's forecast rain totals over central and east Texas, and the layer list open." loading="lazy"></figure>
 </section>
 
-<section class="wrap feature flip">
+<section class="wrap feature">
   <div class="text">
     <h2>Rhythms and Explore</h2>
     <p>When is it hot here? When can it freeze? When does it rain hard? Each is answered from
@@ -83,11 +87,11 @@
     <p>Explore takes any question further — type it in words with ⌘K, and get the dates, the
       readings and every year side by side.</p>
   </div>
-  <figure class="shot"><img src="screens/mac-rhythms.png" alt="Rhythms: when it's hot, muggy and when it can freeze, each as a curve through the year."></figure>
+  <figure class="shot"><img src="screens/rhythms-hot.png" alt="When is it hot? Hot most days June 10 to September 28, 90° possible from late March to late October, drawn as a curve through the year." loading="lazy"></figure>
 </section>
 
 <section class="wrap more">
-  <h2>And</h2>
+  <h2>Also in Vane</h2>
   <ul>
     <li><strong>Compare and History</strong> — any stretch against the same stretch in other years, and one stretch's story.</li>
     <li><strong>Wind</strong> — where it comes from, by season and by hour, from every minute on record.</li>
@@ -107,25 +111,26 @@
   <p class="note">Set up once: your station and home point follow you to each device through iCloud.</p>
 </section>
 
-<section class="wrap needs">
-  <h2>What you need</h2>
-  <p>A <a href="https://tempestwx.com">Tempest weather station</a> and a personal access token
-    from your Tempest account — it's read-only. Everything else is free public data.</p>
-</section>
-
-<section class="wrap sources">
-  <h2>Where the data comes from</h2>
-  <ul>
-    <li>Your Tempest station, through WeatherFlow</li>
-    <li>National Weather Service: forecasts, watches and warnings</li>
-    <li>NEXRAD Level II radar, through Unidata on AWS</li>
-    <li>GOES-19 and GOES-18 satellite, through NOAA nowCOAST</li>
-    <li>Storm Prediction Center and Weather Prediction Center outlooks</li>
-    <li>Open-Meteo: model rain and the upper-air pattern</li>
-    <li>Airport reports, through aviationweather.gov</li>
-    <li>US Drought Monitor</li>
-    <li>Texas A&amp;M Forest Service: burn bans</li>
-  </ul>
+<section class="wrap pair">
+  <div>
+    <h2>What you need</h2>
+    <p>A <a href="https://tempestwx.com">Tempest weather station</a> and a personal access token
+      from your Tempest account — it's read-only. Everything else is free public data.</p>
+  </div>
+  <div>
+    <h2>Where the data comes from</h2>
+    <ul>
+      <li>Your Tempest station, through WeatherFlow</li>
+      <li>National Weather Service: forecasts, watches and warnings</li>
+      <li>NEXRAD Level II radar, through Unidata on AWS</li>
+      <li>GOES-19 and GOES-18 satellite, through NOAA nowCOAST</li>
+      <li>Storm Prediction Center and Weather Prediction Center outlooks</li>
+      <li>Open-Meteo: model rain and the upper-air pattern</li>
+      <li>Airport reports, through aviationweather.gov</li>
+      <li>US Drought Monitor</li>
+      <li>Texas A&amp;M Forest Service: burn bans</li>
+    </ul>
+  </div>
 </section>
 
 </main>
