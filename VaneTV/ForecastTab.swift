@@ -13,7 +13,7 @@
 //  quarter of the row from the three days this page is about, and squeezed
 //  their storm badges onto separate lines.
 //
-//  THE FIGURE IS THE MAC'S, not a second chart: `ThreeDayTimeline` compiled in
+//  THE FIGURE IS THE MAC'S, not a second chart: `HourTimeline` compiled in
 //  from the Mac's sources and drawn at `scale`. The models' rain agreement
 //  strip is left off here — eighteen hours of a subtle strip, one more feed for
 //  the TV to poll, and nothing you could read from the sofa.
@@ -66,7 +66,7 @@ struct ForecastTab: View {
                 Text("The hourly forecast hasn't arrived yet.")
                     .font(.system(size: 26)).foregroundStyle(.secondary)
             } else {
-                ThreeDayTimeline(hours: r.threeDays, timezone: tz, precip: nil,
+                HourTimeline(hours: r.threeDays, timezone: tz, precip: nil,
                                  risks: risks, scale: 1.45, textScale: 2, isTenFoot: true)
             }
             Spacer(minLength: 0)

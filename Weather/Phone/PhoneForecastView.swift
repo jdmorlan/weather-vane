@@ -56,12 +56,13 @@ struct PhoneForecastFigure: View {
     @ObservedObject var storms: StormOutlookModel
     @EnvironmentObject private var settings: AppSettings
 
-    /// The figure's height at scale 1, from `ThreeDayTimeline.Lanes` without
-    /// the model strip. Used only to shrink it to fit; the figure sets its own
-    /// height.
-    private static let figureHeight: CGFloat = 310
+    /// The figure's TALLEST height at scale 1 — every lane but the model strip,
+    /// which the phone doesn't pass — from `HourTimeline.Lanes`. Lanes with
+    /// nothing to say stand down and the figure comes out shorter; this is
+    /// only used to shrink it to fit, and the figure sets its own height.
+    private static let figureHeight: CGFloat = 330
     /// The narrowest an hour may be before the figure scrolls sideways —
-    /// `ThreeDayTimeline`'s own threshold at scale 1.
+    /// `HourTimeline`'s own threshold at scale 1.
     private static let hourWidth: CGFloat = 11
 
     var body: some View {
@@ -104,7 +105,7 @@ struct PhoneForecastFigure: View {
                 let byWidth = geo.size.width / (CGFloat(r.threeDays.count) * Self.hourWidth)
                 let byHeight = geo.size.height / Self.figureHeight
                 let scale = min(1, byWidth, byHeight)
-                ThreeDayTimeline(hours: r.threeDays, timezone: tz, precip: nil,
+                HourTimeline(hours: r.threeDays, timezone: tz, precip: nil,
                                  risks: risks(r, tz), scale: scale,
                                  textScale: max(scale, 0.9))
             }

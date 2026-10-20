@@ -482,7 +482,7 @@ struct RightNowCard: View {
 /// strip, and the strip itself was a row of boxes spending equal ink on every hour.
 /// Both are gone. What the cards had that a figure doesn't is WORDS — the shape
 /// sentence and the heads-up lines — so those lead, and the day itself is one
-/// continuous drawing: `HourlyRibbon`.
+/// continuous drawing: `HourTimeline`.
 ///
 /// It used to start at NOW, which meant the morning stopped existing by lunch.
 /// It now runs midnight to midnight over `DayStrip` — measured behind the seam,
@@ -491,6 +491,11 @@ struct RightNowCard: View {
 struct TodayCard: View {
     let report: WeatherReport
     let strip: DayStrip
+    /// The eleven models' next eighteen hours, for the chart's models lane.
+    var precip: PrecipOutlook? = nil
+    /// Today's storm outlook at home, when one has loaded. Nil draws no storm
+    /// lane and says nothing about storms — Now doesn't fetch outlooks itself.
+    var risks: [String: StormRisk]? = nil
 
     private var r: WeatherReport { report }
 
@@ -524,7 +529,7 @@ struct TodayCard: View {
                     }
                     if !hours.isEmpty {
                         if sentence != nil || !rows.isEmpty { Divider() }
-                        HourlyRibbon(hours: hours, timezone: r.timezone)
+                        HourTimeline(hours: hours, timezone: r.timezone, precip: precip, risks: risks)
                         // Said once, because the two halves of the curve are a
                         // claim about evidence and a legend is cheaper than
                         // hoping a dash reads as doubt. Absent when the station

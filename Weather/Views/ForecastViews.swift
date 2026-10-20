@@ -70,7 +70,7 @@ struct ForecastPage<Grade: View>: View {
                         Text("The hourly forecast hasn't arrived yet.")
                             .font(.callout).foregroundStyle(.secondary)
                     } else {
-                        ThreeDayTimeline(hours: report.threeDays, timezone: tz,
+                        HourTimeline(hours: report.threeDays, timezone: tz,
                                          precip: precip, risks: risks)
                         Text("\(Platform.pointVerb) the chart to read any hour")
                             .font(.caption2).foregroundStyle(.tertiary)

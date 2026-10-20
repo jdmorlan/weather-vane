@@ -3,7 +3,7 @@
 //
 //  The full-width picture of the next twelve hours on Now. It carries its
 //  axis, its labels, and the second series that explains it, because a whole
-//  screen is there to spend. Forecast draws the Mac's `ThreeDayTimeline`.
+//  screen is there to spend. Forecast draws the Mac's `HourTimeline`.
 //
 
 import SwiftUI

@@ -235,7 +235,7 @@ struct WeatherView: View {
                     // happens in. The sentence and the heads-up lines lead; the
                     // hours carry the numbers; the day's parts are bands over the
                     // same strip.
-                    TodayCard(report: r, strip: strip)
+                    TodayCard(report: r, strip: strip, precip: precip.outlook, risks: todayRisk(r))
                     // Detail opens the next three days rather than the grade's
                     // working: the question after reading a ten-day is "tell me
                     // more about the part I'll act on", not "how has it scored".
@@ -562,6 +562,13 @@ struct WeatherView: View {
         let today = r.days.first
         return WeatherAlmanac.comparison(climate, day: todayKey(r),
                                          high: today?.high, low: today?.low)
+    }
+
+    /// Today's storm outlook at home, if the Forecast page has loaded one.
+    private func todayRisk(_ r: WeatherReport) -> [String: StormRisk]? {
+        guard let home = settings.homePoint else { return nil }
+        let day = todayKey(r)
+        return storms.risk(day: day, home: home, timeZone: r.timezone ?? .current).map { [day: $0] }
     }
 
     /// Opens Compare on today: every year's version of this date, with today's

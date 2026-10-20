@@ -9,17 +9,7 @@
 import SwiftUI
 import WeatherKit
 
-/// The color for a dew point, matching the Comfort gauge's bands. One function so the
-/// hourly chips, the day-part track and the week bars all say the same thing.
-func dewBandColor(_ dew: Double) -> Color {
-    switch dew {
-    case ..<55: return .teal
-    case ..<60: return .green
-    case ..<65: return .yellow
-    case ..<70: return .orange
-    default:    return .red
-    }
-}
+// `dewBandColor` lives in HourTimeline.swift, which the TV compiles too.
 
 struct GaugeZone: Identifiable {
     let id = UUID()

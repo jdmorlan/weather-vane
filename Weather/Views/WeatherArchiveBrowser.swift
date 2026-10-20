@@ -458,7 +458,7 @@ struct WeatherArchiveBrowser: View {
             if dayMinutes.day == position, !dayMinutes.samples.isEmpty {
                 let strip = Self.strip(day: position, samples: dayMinutes.samples)
                 VStack(alignment: .leading, spacing: 10) {
-                    HourlyRibbon(hours: strip.hours, timezone: .current)
+                    HourTimeline(hours: strip.hours, timezone: .current)
                     Text(traceCaption(strip))
                         .font(.caption2).foregroundStyle(.tertiary)
                 }
