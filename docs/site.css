@@ -55,7 +55,10 @@ h3 { font-size: 18px; margin: 0 0 6px; }
 .sub { max-width: 620px; margin: 0 auto; color: var(--ink-2); }
 .platforms-line { margin: 22px 0 0; font-size: 15px; font-weight: 600; letter-spacing: 0.02em; color: var(--ink); }
 .status { margin: 6px 0 0; font-size: 14px; color: var(--ink-3); }
-.hero-shot { max-width: 1180px; margin: 48px auto 0; padding: 0 16px; }
+/* With both classes: `.shot`'s `margin: 0` comes later and had un-centred it. */
+.shot.hero-shot { max-width: 1180px; margin: 48px auto 0; padding: 0 16px; }
+/* The window capture carries its own shadow; a card behind it showed as a box. */
+.shot.hero-shot img { background: none; box-shadow: none; border-radius: 0; }
 
 /* Screenshots: a picture that hasn't been taken yet holds its place. */
 .shot { margin: 0; }
@@ -93,12 +96,8 @@ blockquote {
 /* A feature: its words, then its picture at full width. The pictures are
    cropped to the part of the window the words describe. */
 .feature { display: grid; gap: 28px; }
-.feature .text { max-width: 720px; }
-@media (min-width: 900px) {
-  .feature .text { display: grid; grid-template-columns: 220px 1fr; column-gap: 32px; max-width: none; }
-  .feature .text h2 { grid-row: span 3; }
-  .feature .text p { margin-top: 0; }
-}
+.feature .text { max-width: 760px; }
+.feature .text p { margin: 0 0 12px; }
 .feature p { color: var(--ink-2); }
 
 .more ul { padding-left: 20px; color: var(--ink-2); margin: 0; }
