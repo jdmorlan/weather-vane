@@ -1,0 +1,45 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vane Privacy</title>
+<meta name="description" content="What Vane stores, where, and what it sends.">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+<main class="wrap prose">
+  <p><a href="index.html">← Vane</a></p>
+  <h1>Privacy</h1>
+  <p class="lede">Vane collects nothing about you. There are no accounts, no analytics and no tracking.</p>
+
+  <h2>What stays on your devices</h2>
+  <p>Your station's readings are downloaded from WeatherFlow and kept on your device, in the app's
+    own storage, so Vane can compare this year with earlier ones. Your rain gauge log is kept
+    the same way.</p>
+
+  <h2>What iCloud carries</h2>
+  <p>Your Tempest token, station and home point are synced between your own devices through
+    iCloud key-value storage, so you set the app up once. Only your Apple account can read it.</p>
+
+  <h2>What is sent, and to whom</h2>
+  <p>To show your weather, Vane asks public weather services for data. Those requests contain your
+    home point or the area around it, never anything that identifies you:</p>
+  <ul>
+    <li>WeatherFlow (Tempest), with your read-only token, for your station's readings and forecast</li>
+    <li>The National Weather Service, the Storm Prediction Center, the Weather Prediction Center, NOAA nowCOAST and aviationweather.gov</li>
+    <li>NEXRAD radar files, from Unidata on Amazon Web Services</li>
+    <li>Open-Meteo, for model rain and the upper-air pattern</li>
+    <li>The US Drought Monitor, for your county's weekly rating</li>
+    <li>The Texas A&amp;M Forest Service, for burn bans</li>
+    <li>YouTube and Space City Weather, only when you open the Videos or Blog pages</li>
+  </ul>
+  <p>Each service has its own privacy policy for the requests it receives.</p>
+
+  <h2>Questions</h2>
+  <p>Open an issue on <a href="https://github.com/jdmorlan/weather-vane/issues">GitHub</a>.</p>
+  <p class="fine">Last updated 20 October 2026.</p>
+</main>
+</body>
+</html>

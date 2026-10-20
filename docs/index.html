@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Vane — your weather station, explained</title>
+<meta name="description" content="Vane is a weather app for a Tempest weather station that tells you why, not just what. For Mac, iPhone, iPad and Apple TV.">
+<link rel="icon" href="icon.png">
+<link rel="stylesheet" href="site.css">
+</head>
+<body>
+
+<header class="hero">
+  <div class="wrap">
+    <img class="icon" src="icon.png" alt="" width="96" height="96">
+    <h1>Vane</h1>
+    <p class="lede">Your weather station, explained.</p>
+    <p class="sub">A weather app for a Tempest station that says <em>why</em>, not just what —
+      read from your own years of readings. For Mac, iPhone, iPad and Apple TV.</p>
+    <p class="status">In beta on TestFlight · not on the App Store yet</p>
+  </div>
+  <figure class="shot hero-shot">
+    <img src="screens/mac-now.png" alt="Vane's Now page on the Mac: the temperature, today's curve with the dew point under it, and the ten-day forecast.">
+  </figure>
+</header>
+
+<main>
+
+<section class="wrap teach">
+  <h2>It teaches, not just displays</h2>
+  <p class="intro">Every view is built to answer a question someone actually has, with the
+    numbers printed on the picture — and wherever it can, with a mechanism you can check in
+    your own data.</p>
+  <div class="quotes">
+    <blockquote>Ahead on rain this year and still in drought: the rating weighs months of soil,
+      streams and heat, not inches since January.</blockquote>
+    <blockquote>Solid: measured at the station · Dashed: forecast</blockquote>
+    <blockquote>Dry · no storms expected · gusts under 20 mph</blockquote>
+  </div>
+</section>
+
+<section class="wrap feature">
+  <div class="text">
+    <h2>Rain</h2>
+    <p>This year's running total against the usual one, with each month's share of the gap.
+      How long since it rained, and whether the last thirty days are normal for now. The
+      US Drought Monitor's weekly rating for your county. What's coming, in hours and days.</p>
+    <p>Below that, every year on record as a row on the calendar: each rain day, every dry
+      spell of two weeks or more, the biggest days labelled.</p>
+  </div>
+  <figure class="shot"><img src="screens/mac-rain.png" alt="The Rain page: four tiles for this year, lately, drought and what's coming."></figure>
+</section>
+
+<section class="wrap feature flip">
+  <div class="text">
+    <h2>Forecast</h2>
+    <p>The next three days as one figure: temperature, dew point, rain, wind and storms on a
+      shared clock. A lane appears only when it has something to say, and the ones that stood
+      down are named in a line above it.</p>
+    <p>Rain for the next eighteen hours is asked of eleven models at once — the blend, the
+      high-resolution short-range model, eight globals and an AI model — with the
+      disagreement left in, because "4 of 11" is something you can argue with and "36%" isn't.</p>
+  </div>
+  <figure class="shot"><img src="screens/mac-forecast.png" alt="The Forecast page: three days of temperature, dew point, rain and wind."></figure>
+</section>
+
+<section class="wrap feature">
+  <div class="text">
+    <h2>Map</h2>
+    <p>Radar straight from the nearest NEXRAD site, satellite, storm and flood outlooks, rain
+      totals, fronts and burn bans — each layer named and dated by its source, never blended
+      into something that looks like a measurement and isn't.</p>
+  </div>
+  <figure class="shot"><img src="screens/mac-map.png" alt="The Map: radar over the home area."></figure>
+</section>
+
+<section class="wrap feature flip">
+  <div class="text">
+    <h2>Rhythms and Explore</h2>
+    <p>When is it hot here? When can it freeze? When does it rain hard? Each is answered from
+      your own station's years as a place on the calendar: when it's the norm, when it's
+      possible at all, and this season so far.</p>
+    <p>Explore takes any question further — type it in words with ⌘K, and get the dates, the
+      readings and every year side by side.</p>
+  </div>
+  <figure class="shot"><img src="screens/mac-rhythms.png" alt="Rhythms: when it's hot, muggy and when it can freeze, each as a curve through the year."></figure>
+</section>
+
+<section class="wrap more">
+  <h2>And</h2>
+  <ul>
+    <li><strong>Compare and History</strong> — any stretch against the same stretch in other years, and one stretch's story.</li>
+    <li><strong>Wind</strong> — where it comes from, by season and by hour, from every minute on record.</li>
+    <li><strong>Forecast check</strong> — how close the ten-day has been to what the station measured.</li>
+    <li><strong>Your rain gauge</strong> — log your own gauge, and see what it says about the station's sensor.</li>
+    <li><strong>Station</strong> — is it reporting, is the battery holding, are all six sensors answering.</li>
+  </ul>
+</section>
+
+<section class="wrap platforms">
+  <h2>Everywhere you look at the weather</h2>
+  <div class="grid">
+    <div><h3>Mac</h3><p>The whole app, every page.</p></div>
+    <div><h3>iPhone and iPad</h3><p>Now, the map and rain on the iPhone; turn it sideways for the three days. The full app on iPad.</p></div>
+    <div><h3>Apple TV</h3><p>Now, the forecast, the map and videos, drawn to be read from the sofa.</p></div>
+  </div>
+  <p class="note">Set up once: your station and home point follow you to each device through iCloud.</p>
+</section>
+
+<section class="wrap needs">
+  <h2>What you need</h2>
+  <p>A <a href="https://tempestwx.com">Tempest weather station</a> and a personal access token
+    from your Tempest account — it's read-only. Everything else is free public data.</p>
+</section>
+
+<section class="wrap sources">
+  <h2>Where the data comes from</h2>
+  <ul>
+    <li>Your Tempest station, through WeatherFlow</li>
+    <li>National Weather Service: forecasts, watches and warnings</li>
+    <li>NEXRAD Level II radar, through Unidata on AWS</li>
+    <li>GOES-19 and GOES-18 satellite, through NOAA nowCOAST</li>
+    <li>Storm Prediction Center and Weather Prediction Center outlooks</li>
+    <li>Open-Meteo: model rain and the upper-air pattern</li>
+    <li>Airport reports, through aviationweather.gov</li>
+    <li>US Drought Monitor</li>
+    <li>Texas A&amp;M Forest Service: burn bans</li>
+  </ul>
+</section>
+
+</main>
+
+<footer class="wrap">
+  <p><a href="privacy.html">Privacy</a> · <a href="https://github.com/jdmorlan/weather-vane">Source on GitHub</a></p>
+  <p class="fine">Vane is an independent project. It isn't made by or affiliated with WeatherFlow, Tempest, NOAA or any of the services above.</p>
+</footer>
+
+</body>
+</html>
