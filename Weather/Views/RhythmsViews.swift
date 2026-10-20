@@ -22,9 +22,12 @@
 import SwiftUI
 import WeatherKit
 
-struct RhythmsView: View {
+/// A group of Explore's questions, one card each, answered from the archive.
+/// Rhythms shows the seasons; Rain shows its own group under its record.
+struct QuestionCardsView: View {
     let climate: Climatology
     let today: String
+    var group: ExploreQuestion.Group = .seasons
     /// Open one day in History.
     var openDay: (String) -> Void = { _ in }
     /// Take a question to Explore.
@@ -33,7 +36,7 @@ struct RhythmsView: View {
     @State private var shapes: [String: WhenInTheYear] = [:]
     @State private var loaded = false
 
-    private var seasons: [ExploreQuestion] { ExploreQuestion.all.filter { $0.group == .seasons } }
+    private var seasons: [ExploreQuestion] { ExploreQuestion.all.filter { $0.group == group } }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {

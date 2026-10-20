@@ -20,6 +20,8 @@ public struct ExploreQuestion: Identifiable, Equatable, Sendable {
 
     public enum Group: String, CaseIterable, Sendable {
         case seasons = "Seasons"
+        /// The Rain page asks these too, under its own record.
+        case rain = "Rain"
         case other = "Other questions"
     }
 
@@ -81,9 +83,12 @@ public struct ExploreQuestion: Identifiable, Equatable, Sendable {
         ExploreQuestion(id: "freeze", group: .seasons, asks: "When can it freeze?", matched: "froze",
                         mostDaysName: "most nights", possibleName: "first to last freeze", answer: .possible,
                         query: DayQuery(conditions: [Condition(.low, .atOrBelow(32))])),
-        ExploreQuestion(id: "hard-rain", group: .other, asks: "When does it rain hard?", matched: "had 0.5\" or more",
+        ExploreQuestion(id: "rain", group: .rain, asks: "When does it rain?", matched: "had rain",
+                        mostDaysName: "rain most days", possibleName: "rain possible",
+                        query: DayQuery(conditions: [Condition(.rain, .atOrAbove(0.01))])),
+        ExploreQuestion(id: "hard-rain", group: .rain, asks: "When does it rain hard?", matched: "had 0.5\" or more",
                         query: DayQuery(conditions: [Condition(.rain, .atOrAbove(0.5))])),
-        ExploreQuestion(id: "storms", group: .other, asks: "When are storms likeliest?", matched: "had a storm",
+        ExploreQuestion(id: "storms", group: .rain, asks: "When are storms likeliest?", matched: "had a storm",
                         query: DayQuery(conditions: [Condition(.lightning, .atOrAbove(1)),
                                                      Condition(.rain, .atOrAbove(0.1))])),
         ExploreQuestion(id: "september-rain", group: .other, asks: "Does September usually get rain?",

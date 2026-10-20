@@ -87,6 +87,7 @@ struct WeatherView: View {
     @ObservedObject private var hazards: WeatherHazardModel
     @ObservedObject private var forecastCheck: ForecastCheckModel
     @ObservedObject private var precip: PrecipOutlookModel
+    @ObservedObject private var drought: DroughtModel
     @ObservedObject private var storms: StormOutlookModel
 
     /// Which of the four is on screen. A `let` rather than `@State`: the sidebar
@@ -139,6 +140,7 @@ struct WeatherView: View {
         hazards = models.hazards
         forecastCheck = models.forecastCheck
         precip = models.precip
+        drought = models.drought
         storms = models.storms
         self.destination = destination
         self.asked = asked
@@ -328,18 +330,18 @@ struct WeatherView: View {
              + "because a shorter stretch has nothing to be set against."
     }
 
-    /// RAIN — how much, how often, and how long between.
+    /// RAIN — the questions anyone with a yard already has, asked for you.
     ///
-    /// Assembled rather than invented. `RainfallCard` was in History's All-time
-    /// grain and answers the AMOUNT half; `RainHabits` is new and answers the
-    /// other half, which nothing in the app could say before — two Octobers
-    /// holding the same four inches draw identically on a totals chart and are
-    /// not the same October.
+    /// Explore is for questions you bring; this page is for the ones the app
+    /// already knows you'll ask. So it reads from now outward: four tiles that
+    /// answer at a glance (this year, lately, drought, coming), the model grid
+    /// when there's rain in it, what this time of year usually brings, and only
+    /// then the record — which nobody opens Rain to read.
     ///
-    /// It also retires a detour. "Wettest month", "rain by year", "when did it
-    /// last rain" were all reachable only by building a query in Explore, which
-    /// is the right tool for a question you thought of and the wrong one for a
-    /// question the app already knows you'll ask.
+    /// The old page was the same information in the wrong order: the 18-hour
+    /// grid led even when every cell in it was empty, the gauge log split the
+    /// forecast from the totals, and "days since it rained" sat two cards down
+    /// inside a ranked list of dry spells.
     @ViewBuilder private func rainSection(_ r: WeatherReport) -> some View {
         // The same card Now shows, but only while a spell is still open: on
         // this page "what is the rain doing right now" leads, and a finished
@@ -348,45 +350,62 @@ struct WeatherView: View {
             RainDayCard(rain: rain, climate: archive.climatology)
         }
 
-        // ABOVE THE ARCHIVE GATE, DELIBERATELY. Everything below needs about a
-        // season of record before it can say what is usual; this needs only a
+        let today = todayKey(r)
+        // ABOVE THE ARCHIVE GATE, DELIBERATELY. Drought and Coming need only a
         // home point, and "is rain coming" is the question someone opens Rain to
-        // ask on the day they install the app.
-        card(label: "Next 18 hours") {
-            PrecipOutlookCard(outlook: precip.outlook,
-                              failure: precip.failure,
-                              isLoading: precip.isLoading,
-                              needsHome: precip.needsHome,
-                              onSetUpHome: openSetup)
-        }
+        // ask on the day they install the app; the two archive tiles hold their
+        // places and say what they're waiting for.
+        RainDashboard(climate: archive.climatology,
+                      isLoadingArchive: archive.isLoadingClimatology,
+                      today: today, days: r.days,
+                      precip: precip, drought: drought, onSetUpHome: openSetup)
+            .task(id: settings.homePoint.map { "\($0.latitude),\($0.longitude)" } ?? "") {
+                await drought.load(home: settings.homePoint)
+            }
 
-        // What your own gauge caught, where the station missed it — and what
-        // those readings say about the station's rain sensor.
-        card(label: "Your rain gauge") {
-            RainGaugeCard(timeZone: r.timezone ?? .current)
+        // The grid only when it has something in it. When every model is dry
+        // the Coming tile's one sentence is the whole answer, and eleven rows of
+        // empty cells said it again at five times the height.
+        if let outlook = precip.outlook, !outlook.wetModels.isEmpty {
+            card(label: "Next \(PrecipOutlookClient.hours) hours, model by model") {
+                PrecipOutlookCard(outlook: outlook, failure: precip.failure,
+                                  isLoading: precip.isLoading, needsHome: precip.needsHome,
+                                  onSetUpHome: openSetup)
+            }
         }
 
         if let climate = archive.climatology, climate.dayCount >= 90 {
-            let today = todayKey(r)
-            card(label: "Rainfall") {
-                RainfallCard(climate: climate, today: today)
+            sectionHeading("This time of year")
+            QuestionCardsView(climate: climate, today: today, group: .rain) { day in
+                archiveFocus = ArchiveFocus(lens: .history, grain: .day, day: day)
+                navigate(.history)
+            } explore: { question in
+                query = question
+                navigate(.explore)
             }
-            // NOTE — the biggest-days rows are deliberately not clickable. The
-            // obvious destination is History's day grain pinned to that date,
-            // and `WeatherArchiveBrowser` owns its grain and position privately
-            // with no way in from outside. A tap that landed somewhere merely
-            // rain-adjacent would be worse than no tap; opening it properly
-            // means giving the browser an entry point, which is its own change.
-            RainHabitsSection(climate: climate, today: today) { label, content in
-                card(label: label) { content }
+            sectionHeading("The record")
+            card(label: "Every year on record") {
+                RainYearsCard(climate: climate, today: today)
             }
         } else if archive.isLoadingClimatology {
             preparing("Reading your rain history", detail: "Going through the archive.")
         } else {
             ContentUnavailableView("Not enough record yet", systemImage: "drop",
-                                   description: Text("Rain needs about a season of archive before it can say how much is usual, how often it falls, or how long the dry stretches run."))
+                                   description: Text("Rain needs about a season of archive before it can say what this time of year usually brings, or how the years compare."))
                 .emptyStatePanel()
         }
+
+        // Last: it's where you write, not something you read. Its finding about
+        // the station's sensor still shows here, under the log.
+        card(label: "Your rain gauge") {
+            RainGaugeCard(timeZone: r.timezone ?? .current)
+        }
+    }
+
+    private func sectionHeading(_ title: String) -> some View {
+        Text(title)
+            .font(.title3.weight(.semibold))
+            .padding(.top, 10)
     }
 
     /// The wind surface, and the three things that can be true before it exists.
@@ -579,7 +598,7 @@ struct WeatherView: View {
     /// position on the calendar, for someone who just wants to know the place.
     @ViewBuilder private func rhythmsSection(_ r: WeatherReport) -> some View {
         if let climate = archive.climatology, climate.dayCount >= 90 {
-            RhythmsView(climate: climate, today: todayKey(r)) { day in
+            QuestionCardsView(climate: climate, today: todayKey(r)) { day in
                 archiveFocus = ArchiveFocus(lens: .history, grain: .day, day: day)
                 navigate(.history)
             } explore: { question in
@@ -602,9 +621,9 @@ struct WeatherView: View {
                     rhythmPending(nil, detail: "Waiting on the minute-by-minute archive. It builds after the daily one has caught up; this card fills in once it has.")
                 }
             }
-            card(label: "Winter chill") {
-                WinterChillCard(climate: climate, today: todayKey(r), alwaysOpen: true)
-            }
+            // Winter chill used to close this page. It isn't a "when in the
+            // year" question like the rest — it's a gardener's, and waits for a
+            // garden page of its own. `WinterChillCard` is kept, unplaced.
         } else if archive.isLoadingClimatology {
             preparing("Reading the years behind you", detail: "Going through the archive.")
         } else {

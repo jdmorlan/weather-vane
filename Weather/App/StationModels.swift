@@ -52,6 +52,9 @@ final class StationModels: ObservableObject {
     /// the home point, and it answers on an afternoon when the archive has nothing
     /// to say yet.
     let precip = PrecipOutlookModel()
+    /// The Drought Monitor's weekly rating for home's county, for the Rain page.
+    /// Up here so a return to Rain isn't a fetch; the map only changes Thursdays.
+    let drought = DroughtModel()
     /// SPC's and WPC's storm and flood outlooks for the Forecast page, read at
     /// home. Up here so leaving the page and coming back doesn't re-fetch
     /// thirteen files; it only polls while the page is open.
